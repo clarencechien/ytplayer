@@ -206,6 +206,52 @@ export interface PipelineEnv {
   GEMINI_MODEL?: string;
 }
 
+// Cron 佇列：掃 R2 找「有 source.json 但 bilingual.json 缺少或過期」的 Tier 2 影片，
+// 一次 cron 只翻一支（單支約 1–2 分鐘，避免 scheduled 事件跑太長）。
+// 併發保護：.translating 鎖檔，10 分鐘視為 stale。
+export async function translateNextPending(
+  env: PipelineEnv,
+  llmOverride?: LlmFn
+): Promise<{ translated?: string; status?: number; scanned: number }> {
+  const prefixes: string[] = [];
+  let cursor: string | undefined;
+  do {
+    const res = await env.SUBS.list({ prefix: 'subs/', delimiter: '/', cursor });
+    prefixes.push(...(res.delimitedPrefixes ?? []));
+    cursor = res.truncated ? res.cursor : undefined;
+  } while (cursor);
+
+  let scanned = 0;
+  for (const p of prefixes) {
+    const videoId = p.slice('subs/'.length).replace(/\/$/, '');
+    if (!/^[A-Za-z0-9_-]{11}$/.test(videoId)) continue;
+    scanned++;
+
+    const srcHead = await env.SUBS.head(`subs/${videoId}/source.json`);
+    if (!srcHead) continue;
+    const bilHead = await env.SUBS.head(`subs/${videoId}/bilingual.json`);
+    if (bilHead && bilHead.uploaded >= srcHead.uploaded) continue; // 已是最新
+
+    // tier 先讀出來，非 2 直接跳過（不佔鎖、不進 pipeline）
+    const srcObj = await env.SUBS.get(`subs/${videoId}/source.json`);
+    if (!srcObj) continue;
+    const tier = (JSON.parse(await srcObj.text()) as { tier?: number }).tier;
+    if (tier !== 2) continue;
+
+    const lock = await env.SUBS.head(`subs/${videoId}/.translating`);
+    if (lock && Date.now() - lock.uploaded.getTime() < 10 * 60 * 1000) continue; // 有人在翻
+
+    await env.SUBS.put(`subs/${videoId}/.translating`, new Date().toISOString());
+    try {
+      const r = await runPipeline(env, videoId, true, llmOverride);
+      return { translated: videoId, status: r.status, scanned };
+    } finally {
+      await env.SUBS.delete(`subs/${videoId}/.translating`);
+    }
+  }
+  return { scanned };
+}
+
 export async function runPipeline(
   env: PipelineEnv,
   videoId: string,

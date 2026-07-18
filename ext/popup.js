@@ -161,8 +161,13 @@ async function main() {
       });
       const out = await res.json();
       if (!res.ok || !out.ok) throw new Error(out.error ?? (out.errors ?? []).join('; ') ?? `HTTP ${res.status}`);
+      const srtUrl = `${cfg.workerUrl}/subs/${state.urlVideoId}/bilingual.srt`;
       result.innerHTML = `<span class="ok">✅ 已存入 ${esc(out.key)}（${out.cueCount} cues）</span>` +
-        (out.warning ? `<div class="warn">⚠ ${esc(out.warning)}</div>` : '');
+        (out.warning ? `<div class="warn">⚠ ${esc(out.warning)}</div>` : '') +
+        (tier === 2
+          ? `<div class="hint">已排入翻譯佇列（cron 每 5 分鐘自動跑，單支約 1–2 分鐘）。完成後見：<br>
+             <a href="${esc(srtUrl)}" target="_blank" style="color:#59f">${esc(srtUrl)}</a></div>`
+          : `<div class="hint">Tier ${tier} 只 ingest 不翻譯（等 Phase 2.5）</div>`);
     } catch (e) {
       let msg = String(e.message ?? e);
       if (/failed to fetch/i.test(msg)) {

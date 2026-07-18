@@ -9,7 +9,7 @@
 // 未設定 secret 時放行但在回應中警告（讓「連結 GitHub 即可用」成立，設了就鎖）。
 
 import { validateIngest } from './validate';
-import { runPipeline } from './pipeline';
+import { runPipeline, translateNextPending } from './pipeline';
 
 export interface Env {
   SUBS: R2Bucket;
@@ -90,5 +90,11 @@ export default {
     }
 
     return json({ ok: false, error: 'not found' }, 404);
+  },
+
+  // Cron：自動翻譯佇列。ingest 完什麼都不用做，幾分鐘內自動翻好。
+  async scheduled(_ctrl: ScheduledController, env: Env): Promise<void> {
+    const r = await translateNextPending(env);
+    if (r.translated) console.log(`cron translated ${r.translated} (status ${r.status})`);
   },
 } satisfies ExportedHandler<Env>;

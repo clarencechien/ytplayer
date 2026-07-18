@@ -5,6 +5,7 @@
   "compatibility_date": "2026-07-01",
   "observability": { "enabled": true },
   "vars": { "GEMINI_MODEL": "gemini-3.5-flash" },
+  "triggers": { "crons": ["*/5 * * * *"] },
   "r2_buckets": [
     { "binding": "SUBS", "bucket_name": "ytplayer-subs" }
   ]
