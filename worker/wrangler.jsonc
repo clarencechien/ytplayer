@@ -1,0 +1,10 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "ytplayer",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-07-01",
+  "observability": { "enabled": true },
+  "r2_buckets": [
+    { "binding": "SUBS", "bucket_name": "ytplayer-subs" }
+  ]
+}

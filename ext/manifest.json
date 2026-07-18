@@ -1,0 +1,21 @@
+{
+  "manifest_version": 3,
+  "name": "ytplayer ingest",
+  "version": "0.1.0",
+  "description": "抓取 YouTube caption track 送到自用雙語字幕 pipeline（load unpacked 自用）",
+  "action": { "default_popup": "popup.html" },
+  "host_permissions": ["*://*.youtube.com/*"],
+  "content_scripts": [
+    {
+      "matches": ["*://*.youtube.com/*"],
+      "js": ["intercept.js"],
+      "run_at": "document_start",
+      "world": "MAIN"
+    },
+    {
+      "matches": ["*://*.youtube.com/*"],
+      "js": ["bridge.js"],
+      "run_at": "document_start"
+    }
+  ]
+}

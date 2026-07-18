@@ -1,0 +1,53 @@
+{
+  "wireMagic": "pb3",
+  "events": [
+    { "tStartMs": 0, "dDurationMs": 2038200, "id": 1, "wpWinPosId": 1, "wsWinStyleId": 1 },
+    {
+      "tStartMs": 3480, "dDurationMs": 3040, "wWinId": 1,
+      "segs": [
+        { "utf8": "When" },
+        { "utf8": " you're", "tOffsetMs": 120 },
+        { "utf8": " dealing", "tOffsetMs": 240 },
+        { "utf8": " [music]", "tOffsetMs": 449 },
+        { "utf8": " with", "tOffsetMs": 680 }
+      ]
+    },
+    { "tStartMs": 4790, "dDurationMs": 1730, "wWinId": 1, "aAppend": 1, "segs": [{ "utf8": "\n" }] },
+    {
+      "tStartMs": 4800, "dDurationMs": 3800, "wWinId": 1,
+      "segs": [
+        { "utf8": "something" },
+        { "utf8": " as", "tOffsetMs": 280 },
+        { "utf8": " complex", "tOffsetMs": 440 },
+        { "utf8": " as", "tOffsetMs": 1240 },
+        { "utf8": " building", "tOffsetMs": 1440 },
+        { "utf8": " a", "tOffsetMs": 1680 }
+      ]
+    },
+    { "tStartMs": 6510, "dDurationMs": 2090, "wWinId": 1, "aAppend": 1, "segs": [{ "utf8": "\n" }] },
+    {
+      "tStartMs": 6520, "dDurationMs": 3800, "wWinId": 1,
+      "segs": [
+        { "utf8": "rocket" },
+        { "utf8": " or", "tOffsetMs": 440 },
+        { "utf8": " as", "tOffsetMs": 520 },
+        { "utf8": " building", "tOffsetMs": 640 },
+        { "utf8": " a", "tOffsetMs": 840 },
+        { "utf8": " launchpad,", "tOffsetMs": 880 },
+        { "utf8": " being", "tOffsetMs": 1800 }
+      ]
+    },
+    { "tStartMs": 8590, "dDurationMs": 1730, "wWinId": 1, "aAppend": 1, "segs": [{ "utf8": "\n" }] },
+    {
+      "tStartMs": 8600, "dDurationMs": 3960, "wWinId": 1,
+      "segs": [
+        { "utf8": "extremely" },
+        { "utf8": " mindful", "tOffsetMs": 600 },
+        { "utf8": " of", "tOffsetMs": 1000 },
+        { "utf8": " the", "tOffsetMs": 1080 },
+        { "utf8": " critical", "tOffsetMs": 1160 },
+        { "utf8": " path", "tOffsetMs": 1480 }
+      ]
+    }
+  ]
+}

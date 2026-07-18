@@ -1,0 +1,65 @@
+{
+  "probedAt": "2026-07-18T07:27:47.343Z",
+  "url": "https://www.youtube.com/watch?v=-a0ecQMq-rM&t=529s",
+  "urlVideoId": "-a0ecQMq-rM",
+  "globalVar": {
+    "present": true,
+    "videoId": "-a0ecQMq-rM",
+    "staleAfterSpaNav": false
+  },
+  "htmlParse": {
+    "works": true,
+    "videoId": "-a0ecQMq-rM"
+  },
+  "videoId": "-a0ecQMq-rM",
+  "meta": {
+    "title": "Starship - Critical Path",
+    "channel": "SpaceX",
+    "lengthSeconds": "2056",
+    "descriptionPrefix": "The path to launch is filled with obstacles and success is only possible through the tireless efforts of many working together towards a common goal. “Critical Path” continues the ongoing Starship ser"
+  },
+  "translationLanguagesCount": 156,
+  "captionTracks": [
+    {
+      "languageCode": "en",
+      "kind": "asr",
+      "name": "英文 (自動產生)",
+      "vssId": "a.en",
+      "isTranslatable": true,
+      "baseUrlParams": [
+        "v",
+        "ei",
+        "caps",
+        "opi",
+        "exp",
+        "xoaf",
+        "xowf",
+        "xospf",
+        "hl",
+        "ip",
+        "ipbits",
+        "expire",
+        "sparams",
+        "signature",
+        "key",
+        "kind",
+        "lang",
+        "variant"
+      ]
+    }
+  ],
+  "trackSamples": [
+    {
+      "languageCode": "en",
+      "kind": "asr",
+      "status": 200,
+      "bytes": 0,
+      "corsHeaders": {
+        "accessControlAllowOrigin": null,
+        "accessControlAllowCredentials": null
+      },
+      "error": "SyntaxError: Unexpected end of JSON input"
+    }
+  ],
+  "corsTestSnippet": "fetch(\"https://www.youtube.com/api/timedtext?v=-a0ecQMq-rM&ei=iCpbarjzDeSDvcAP55GOqAg&caps=asr&opi=112496729&exp=xpe&xoaf=5&xowf=1&xospf=1&hl=zh-TW&ip=0.0.0.0&ipbits=0&expire=1784384760&sparams=ip,ipbits,expire,v,ei,caps,opi,exp,xoaf&signature=18294955D8A47B8845E2D064188F232F949ADA38.BBEA78F5622EE8FED631696B502F168F46279B13&key=yt8&kind=asr&lang=en&variant=gemini&fmt=json3\").then(r => r.text()).then(t => console.log('CORS OK, bytes=', t.length)).catch(e => console.log('CORS BLOCKED:', String(e)))"
+}
