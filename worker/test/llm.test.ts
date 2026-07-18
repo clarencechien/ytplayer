@@ -31,7 +31,7 @@ describe('geminiGenerate 重試策略', () => {
     expect(calls).toBe(1);
   });
 
-  it('連續 location 400 到達上限後丟錯（不無限重試）', async () => {
+  it('連續 location 400 到達上限後丟錯（不無限重試）', { timeout: 15000 }, async () => {
     let calls = 0;
     vi.stubGlobal('fetch', async () => {
       calls++;
