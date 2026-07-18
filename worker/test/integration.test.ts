@@ -49,12 +49,15 @@ const makeSource = () => ({
   ],
 });
 
-// glossary 呼叫回術語表；翻譯呼叫依 prompt 中的「id: 句子」回中文
+// glossary 呼叫回術語表；修稿呼叫回修正後英文；翻譯呼叫依 prompt 中的「id: 句子」回中文
 const fakeLlm = async (prompt: string): Promise<string> => {
   if (prompt.includes('術語編輯')) {
-    return '[{"term":"Agents","suggested_zh":"agent","note":"保留英文"}]';
+    return '[{"term":"agents","zh":"Agent","note":"能自主完成任務的 AI 程式"}]';
   }
   const ids = [...prompt.matchAll(/^(\d+): /gm)].map((m) => Number(m[1]));
+  if (prompt.includes('英文字幕編輯')) {
+    return JSON.stringify(ids.map((id) => ({ id, en: `Repaired sentence ${id}.` })));
+  }
   return JSON.stringify(ids.map((id) => ({ id, zh: `中文${id}。` })));
 };
 
@@ -70,13 +73,21 @@ describe('runPipeline（整合）', () => {
     expect(stats.sentences).toBe(3); // 兩個 cue 併成一句 + 另兩句
     expect(stats.glossaryTerms).toBe(1);
     expect(stats.untranslated).toBe(0);
+    expect(stats.asrRepaired).toBe(0); // Tier 2 不修稿
+    expect(stats.autoNotes).toBe(1); // "Agents are moving..." 第一次出現 → 自動附白話註
     expect(stats.warnings).toEqual([]);
 
     const bilingual = JSON.parse(SUBS.store.get('subs/ksfm6jeTg3Q/bilingual.json')!.value);
     expect(bilingual.promptVersion).toBeTruthy();
     expect(bilingual.model).toBe('fake-model');
     expect(bilingual.cues.length).toBe(3);
-    expect(bilingual.cues[1]).toMatchObject({ start: 2, end: 6, en: 'Agents are moving to production today.', zh: '中文1。' });
+    expect(bilingual.cues[1]).toMatchObject({
+      start: 2,
+      end: 6,
+      en: 'Agents are moving to production today.',
+      zh: '中文1。',
+      note: '能自主完成任務的 AI 程式',
+    });
     expect(SUBS.store.get('subs/ksfm6jeTg3Q/bilingual.srt')!.value).toContain('中文0。\nHello everyone.');
     expect(SUBS.store.has('subs/ksfm6jeTg3Q/sentences.json')).toBe(true);
     expect(SUBS.store.has('subs/ksfm6jeTg3Q/glossary.json')).toBe(true);
@@ -100,10 +111,28 @@ describe('runPipeline（整合）', () => {
     expect(stats.warnings.some((w) => w.includes('翻譯失敗'))).toBe(true);
   });
 
-  it('tier 3 被拒（紅線）', async () => {
+  it('Phase 2.5：Tier 3 + 英文 ASR 先修稿再翻，en 是修好的版本', async () => {
     const SUBS = new FakeR2();
     const src = makeSource();
     src.tier = 3;
+    src.track = { languageCode: 'en' };
+    await SUBS.put('subs/ksfm6jeTg3Q/source.json', JSON.stringify(src));
+    const env = { SUBS: SUBS as unknown as R2Bucket, GEMINI_MODEL: 'fake-model' };
+    const r = await runPipeline(env, 'ksfm6jeTg3Q', false, fakeLlm);
+    expect(r.status).toBe(200);
+    const stats = (r.body as { stats: { asrRepaired: number } }).stats;
+    expect(stats.asrRepaired).toBe(3);
+    const bilingual = JSON.parse(SUBS.store.get('subs/ksfm6jeTg3Q/bilingual.json')!.value);
+    expect(bilingual.tier).toBe(3);
+    expect(bilingual.cues[0].en).toBe('Repaired sentence 0.');
+    expect(bilingual.cues[0].zh).toBe('中文0。');
+  });
+
+  it('tier 3 非英文被拒（Phase 2.5 僅限英文來源）', async () => {
+    const SUBS = new FakeR2();
+    const src = makeSource();
+    src.tier = 3;
+    src.track = { languageCode: 'ja' };
     await SUBS.put('subs/ksfm6jeTg3Q/source.json', JSON.stringify(src));
     const r = await runPipeline({ SUBS: SUBS as unknown as R2Bucket }, 'ksfm6jeTg3Q', false, fakeLlm);
     expect(r.status).toBe(422);
@@ -123,16 +152,28 @@ describe('translateNextPending（cron 佇列）', () => {
     expect(SUBS.store.has('subs/ksfm6jeTg3Q/.translating')).toBe(false);
   });
 
-  it('Tier 3 跳過、不佔佇列，後面的 Tier 2 照翻', async () => {
+  it('Tier 3 非英文跳過、不佔佇列，後面的 Tier 2 照翻', async () => {
     const SUBS = new FakeR2();
     const t3 = makeSource();
     t3.videoId = 'AAAAAAAAAAA';
     t3.tier = 3;
+    t3.track = { languageCode: 'ja' };
     await SUBS.put('subs/AAAAAAAAAAA/source.json', JSON.stringify(t3));
     await SUBS.put('subs/ksfm6jeTg3Q/source.json', JSON.stringify(makeSource()));
     const r = await translateNextPending(envOf(SUBS), fakeLlm);
     expect(r.translated).toBe('ksfm6jeTg3Q');
     expect(SUBS.store.has('subs/AAAAAAAAAAA/bilingual.json')).toBe(false);
+  });
+
+  it('Tier 3 英文 ASR 會進佇列（Phase 2.5）', async () => {
+    const SUBS = new FakeR2();
+    const t3 = makeSource();
+    t3.tier = 3;
+    t3.track = { languageCode: 'en' };
+    await SUBS.put('subs/ksfm6jeTg3Q/source.json', JSON.stringify(t3));
+    const r = await translateNextPending(envOf(SUBS), fakeLlm);
+    expect(r.translated).toBe('ksfm6jeTg3Q');
+    expect(r.status).toBe(200);
   });
 
   it('bilingual 比 source 新 → 無事可做；重新 ingest（source 較新）→ 重翻', async () => {
