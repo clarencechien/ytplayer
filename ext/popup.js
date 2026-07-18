@@ -1,10 +1,36 @@
 // Popup：顯示 tier 與攔到的字幕軌，選定後 normalize 並送 Worker /ingest。
-import { CONFIG } from './config.js';
+// 設定（Worker URL / INGEST_KEY）存 chrome.storage.local — key 不進 repo。
 import { normalizeJson3 } from './normalize.js';
+
+const DEFAULT_WORKER_URL = 'https://ytplayer.sw-tech.workers.dev';
 
 const app = document.getElementById('app');
 const result = document.getElementById('result');
 const esc = (s) => String(s ?? '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+
+async function getConfig() {
+  const { config } = await chrome.storage.local.get('config');
+  return { workerUrl: DEFAULT_WORKER_URL, ingestKey: '', ...(config ?? {}) };
+}
+
+// 防呆：自動補 https://、去尾端斜線（實測踩過沒加 scheme 的雷）
+function normalizeUrl(u) {
+  u = (u ?? '').trim();
+  if (!u) return '';
+  if (!/^https?:\/\//i.test(u)) u = 'https://' + u;
+  return u.replace(/\/+$/, '');
+}
+
+function setupSettings(cfg) {
+  const url = document.getElementById('cfg-url');
+  const key = document.getElementById('cfg-key');
+  url.value = cfg.workerUrl;
+  key.value = cfg.ingestKey;
+  document.getElementById('cfg-save').addEventListener('click', async () => {
+    await chrome.storage.local.set({ config: { workerUrl: normalizeUrl(url.value), ingestKey: key.value.trim() } });
+    location.reload();
+  });
+}
 
 // append-01 §B：vssId 前綴 + kind 交叉驗證
 const isAsr = (t) => t.kind === 'asr' || (typeof t.vssId === 'string' && t.vssId.startsWith('a.'));
@@ -26,20 +52,20 @@ const TIER_MSG = {
 };
 
 // 「Failed to fetch」沒有狀態碼可看，分層診斷：網路層 → 是不是本專案 Worker → CORS
-async function diagnoseWorker() {
+async function diagnoseWorker(workerUrl) {
   try {
-    await fetch(`${CONFIG.WORKER_URL}/`, { mode: 'no-cors' });
+    await fetch(`${workerUrl}/`, { mode: 'no-cors' });
   } catch {
-    return '診斷：WORKER_URL 連不上（網路/DNS 層失敗）— 檢查 config.js 拼字，或是否被其他擴充功能擋掉';
+    return '診斷：Worker URL 連不上（網路/DNS 層失敗）— 檢查設定裡的網址，或是否被其他擴充功能擋掉';
   }
   try {
-    const r = await fetch(`${CONFIG.WORKER_URL}/`);
+    const r = await fetch(`${workerUrl}/`);
     const j = await r.json();
     if (j?.service === 'ytplayer') return '診斷：Worker 本身正常，但 /ingest 失敗 — 請把這個結果回報';
     return `診斷：網址可連，但那裡不是 ytplayer Worker（回應：${JSON.stringify(j).slice(0, 80)}）`;
   } catch {
     return '診斷：網址有回應但沒有 CORS 標頭 → Worker 大概還沒部署成功。' +
-      '請直接開 WORKER_URL 看是不是 Cloudflare 錯誤頁；' +
+      '請直接開 Worker URL 看是不是 Cloudflare 錯誤頁；' +
       '最常見原因：Workers Builds 的 production branch 設成 main，但程式碼還在開發分支';
   }
 }
@@ -54,8 +80,10 @@ function renderError(msg) {
 }
 
 async function main() {
-  if (CONFIG.WORKER_URL.includes('YOUR-SUBDOMAIN')) {
-    renderError('請先編輯 ext/config.js 的 WORKER_URL（部署 Worker 後的網址）');
+  const cfg = await getConfig();
+  setupSettings(cfg);
+  if (!cfg.workerUrl) {
+    renderError('請先在下方「設定」填 Worker URL');
     return;
   }
   const tab = await activeTab();
@@ -126,9 +154,9 @@ async function main() {
         },
         cues,
       };
-      const res = await fetch(`${CONFIG.WORKER_URL}/ingest`, {
+      const res = await fetch(`${cfg.workerUrl}/ingest`, {
         method: 'POST',
-        headers: { 'content-type': 'application/json', 'x-ingest-key': CONFIG.INGEST_KEY },
+        headers: { 'content-type': 'application/json', 'x-ingest-key': cfg.ingestKey },
         body: JSON.stringify(payload),
       });
       const out = await res.json();
@@ -138,7 +166,7 @@ async function main() {
     } catch (e) {
       let msg = String(e.message ?? e);
       if (/failed to fetch/i.test(msg)) {
-        msg += `\n${await diagnoseWorker()}`;
+        msg += `\n${await diagnoseWorker(cfg.workerUrl)}`;
       }
       result.innerHTML = `<span class="err">❌ ${esc(msg)}</span>`;
     } finally {

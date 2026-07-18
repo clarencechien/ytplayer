@@ -6,8 +6,9 @@
 ## 安裝
 
 1. 部署 Worker（見 `worker/README.md`），拿到網址
-2. 編輯 `ext/config.js`：填 `WORKER_URL` 與 `INGEST_KEY`（與 Worker secret 一致；沒設 secret 就留空）
-3. `chrome://extensions` → 開啟「開發人員模式」→「載入未封裝項目」→ 選這個 `ext/` 資料夾
+2. `chrome://extensions` → 開啟「開發人員模式」→「載入未封裝項目」→ 選這個 `ext/` 資料夾
+3. 點 ext 圖示 → popup 底部「⚙ 設定」→ 填 Worker URL 與 INGEST_KEY → 儲存
+   （設定存在瀏覽器的 `chrome.storage.local`，**key 不進 repo**；網址沒打 `https://` 會自動補）
 
 ## 使用流程
 

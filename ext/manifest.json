@@ -4,6 +4,7 @@
   "version": "0.1.0",
   "description": "抓取 YouTube caption track 送到自用雙語字幕 pipeline（load unpacked 自用）",
   "action": { "default_popup": "popup.html" },
+  "permissions": ["storage"],
   "host_permissions": ["*://*.youtube.com/*"],
   "content_scripts": [
     {
