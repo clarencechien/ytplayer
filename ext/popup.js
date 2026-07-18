@@ -25,6 +25,25 @@ const TIER_MSG = {
   4: '沒有任何 caption track，無法處理',
 };
 
+// 「Failed to fetch」沒有狀態碼可看，分層診斷：網路層 → 是不是本專案 Worker → CORS
+async function diagnoseWorker() {
+  try {
+    await fetch(`${CONFIG.WORKER_URL}/`, { mode: 'no-cors' });
+  } catch {
+    return '診斷：WORKER_URL 連不上（網路/DNS 層失敗）— 檢查 config.js 拼字，或是否被其他擴充功能擋掉';
+  }
+  try {
+    const r = await fetch(`${CONFIG.WORKER_URL}/`);
+    const j = await r.json();
+    if (j?.service === 'ytplayer') return '診斷：Worker 本身正常，但 /ingest 失敗 — 請把這個結果回報';
+    return `診斷：網址可連，但那裡不是 ytplayer Worker（回應：${JSON.stringify(j).slice(0, 80)}）`;
+  } catch {
+    return '診斷：網址有回應但沒有 CORS 標頭 → Worker 大概還沒部署成功。' +
+      '請直接開 WORKER_URL 看是不是 Cloudflare 錯誤頁；' +
+      '最常見原因：Workers Builds 的 production branch 設成 main，但程式碼還在開發分支';
+  }
+}
+
 async function activeTab() {
   const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
   return tab;
@@ -117,7 +136,11 @@ async function main() {
       result.innerHTML = `<span class="ok">✅ 已存入 ${esc(out.key)}（${out.cueCount} cues）</span>` +
         (out.warning ? `<div class="warn">⚠ ${esc(out.warning)}</div>` : '');
     } catch (e) {
-      result.innerHTML = `<span class="err">❌ ${esc(e.message ?? e)}</span>`;
+      let msg = String(e.message ?? e);
+      if (/failed to fetch/i.test(msg)) {
+        msg += `\n${await diagnoseWorker()}`;
+      }
+      result.innerHTML = `<span class="err">❌ ${esc(msg)}</span>`;
     } finally {
       btn.disabled = false;
     }
