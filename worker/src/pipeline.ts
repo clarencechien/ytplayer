@@ -228,8 +228,11 @@ export function assembleBilingual(
 
 // 術語第一次出現時，把 glossary 的白話註解附到該句（deterministic — chunk 平行翻譯，
 // 模型不知道全片第一次出現在哪，這件事只能程式做。原則 #2：程式碼管品質地板）。
-// 註格式「呈現形式：解釋」讓觀眾知道在解釋哪個詞；只補「呈現形式含英文」的術語；
-// 首句已有譯註時退而找下一句含該術語的句子，不覆蓋既有譯註。
+// 註格式「呈現形式：解釋」；一句最多 3 條註（含譯者的雙關註，多條以換行相疊）；
+// 該句滿了才退到下一句含該術語處。三條都不夠解釋的內容屬跨領域，超出字幕範圍。
+const MAX_NOTES_PER_CUE = 3;
+const noteCount = (c: BilingualCue): number => (c.note ? c.note.split('\n').length : 0);
+
 export function attachGlossaryNotes(cues: BilingualCue[], glossary: GlossaryEntry[]): number {
   let added = 0;
   for (const g of glossary) {
@@ -239,11 +242,12 @@ export function attachGlossaryNotes(cues: BilingualCue[], glossary: GlossaryEntr
     let target: BilingualCue | undefined;
     for (const v of variants) {
       const re = new RegExp(`\\b${v.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`, 'i');
-      target = cues.find((c) => !c.untranslated && !c.note && re.test(c.en));
+      target = cues.find((c) => !c.untranslated && noteCount(c) < MAX_NOTES_PER_CUE && re.test(c.en));
       if (target) break;
     }
     if (target) {
-      target.note = `${g.zh}：${g.note}`.slice(0, 90);
+      const line = `${g.zh}：${g.note}`.slice(0, 90);
+      target.note = target.note ? `${target.note}\n${line}` : line;
       added++;
     }
   }

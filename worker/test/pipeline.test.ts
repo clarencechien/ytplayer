@@ -146,7 +146,7 @@ describe('attachGlossaryNotes', () => {
     expect(cues[2].note).toBeUndefined();
   });
 
-  it('純中文呈現的術語不需要註；首句已有譯註 → 退到下一句含該術語的句子', () => {
+  it('純中文呈現的術語不需要註；同句可疊多條（既有譯註保留在最上面）', () => {
     const cues = mkCues();
     cues[1].note = '既有譯註';
     const added = attachGlossaryNotes(cues, [
@@ -154,9 +154,24 @@ describe('attachGlossaryNotes', () => {
       { term: 'intro', zh: '開場', note: '不該出現' },
     ]);
     expect(added).toBe(1);
-    expect(cues[1].note).toBe('既有譯註');
-    expect(cues[2].note).toBe('護欄機制（Guardrails）：解釋'); // 退位到第二次出現
+    expect(cues[1].note).toBe('既有譯註\n護欄機制（Guardrails）：解釋');
     expect(cues[0].note).toBeUndefined();
+  });
+
+  it('一句最多 3 條註，滿了才退到下一句含該術語處', () => {
+    const cues: BilingualCue[] = [
+      { start: 0, end: 2, en: 'alpha beta gamma delta here.', zh: '第一句。' },
+      { start: 2, end: 4, en: 'delta appears again.', zh: '第二句。' },
+    ];
+    const added = attachGlossaryNotes(cues, [
+      { term: 'alpha', zh: 'Alpha', note: '解釋A' },
+      { term: 'beta', zh: 'Beta', note: '解釋B' },
+      { term: 'gamma', zh: 'Gamma', note: '解釋C' },
+      { term: 'delta', zh: 'Delta', note: '解釋D' }, // 首句已滿 3 條 → 退到第二句
+    ]);
+    expect(added).toBe(4);
+    expect(cues[0].note).toBe('Alpha：解釋A\nBeta：解釋B\nGamma：解釋C');
+    expect(cues[1].note).toBe('Delta：解釋D');
   });
 
   it('term 含多形式（a / b）逐一嘗試', () => {

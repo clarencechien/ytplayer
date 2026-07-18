@@ -53,7 +53,7 @@ const STYLE = `
     font-weight: 600; line-height: 1.4; text-shadow: 0 1px 2px rgba(0,0,0,.8);
   }
   #subEn { color: var(--en); }
-  #subNote { color: var(--accent); font-size: calc(clamp(12px, 1.3vw, 15px) * var(--scale)); }
+  #subNote { color: var(--accent); font-size: calc(clamp(12px, 1.3vw, 15px) * var(--scale)); white-space: pre-line; }
   body[data-mode="zh"] #subEn { display: none; }
   body[data-mode="en"] #subZh { display: none; }
   body.notes-off #subNote, body.notes-off .row .note { display: none; }
@@ -72,7 +72,7 @@ const STYLE = `
   .row .t { color: var(--dim); font-size: 11px; margin-right: 6px; font-variant-numeric: tabular-nums; }
   .row .zh, .row .en { display: block; font-size: calc(14px * var(--scale)); line-height: 1.45; }
   .row .en { color: var(--en); opacity: .85; }
-  .row .note { display: block; color: var(--accent); font-size: calc(12px * var(--scale)); }
+  .row .note { display: block; color: var(--accent); font-size: calc(12px * var(--scale)); white-space: pre-line; }
   .row .note::before { content: "註 "; opacity: .7; }
   body[data-mode="zh"] .row .en { display: none; }
   body[data-mode="en"] .row .zh { display: none; }
