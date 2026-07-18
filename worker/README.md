@@ -32,14 +32,22 @@
 
 ## 端點
 
-| 方法 | 路徑 | 說明 |
-|---|---|---|
-| POST | `/ingest` | 收 ext 的 payload，驗證後存 `subs/{videoId}/source.json` |
-| POST | `/translate/{videoId}` | Phase 2 翻譯 pipeline（只吃 Tier 2；`?force=1` 忽略 cache 重跑） |
-| GET | `/subs/{videoId}/{file}` | `source.json` / `sentences.json` / `glossary.json` / `bilingual.json` / `bilingual.srt` |
-| GET | `/` | health / 設定狀態 |
+| 方法 | 路徑 | 認證 | 說明 |
+|---|---|---|---|
+| GET | `/` | 公開 | 影片清單頁（player 入口） |
+| GET | `/watch/{videoId}` | 公開 | Player 頁（iframe + 雙語字幕層 + 逐句稿） |
+| GET | `/videos.json` | 公開 | 清單資料 |
+| GET | `/subs/{videoId}/{file}` | 公開 | `source/sentences/glossary/bilingual/info.json`、`bilingual.srt` |
+| GET | `/health` | 公開 | 狀態（`ingestKeyConfigured` 要是 `true`） |
+| POST | `/ingest` | key | 收 ext payload，存 `subs/{videoId}/source.json` |
+| POST | `/translate/{videoId}` | key | 手動觸發翻譯（`?force=1` 忽略 cache；平常交給 cron 即可） |
 
-所有端點（除 `/`）都要 header `x-ingest-key`。
+Cron（`*/5`）自動掃 R2：Tier 2 且 bilingual 缺少/過期 → 翻譯，一次一支。
+
+## 自訂網域
+
+Worker → Settings → Domains & Routes → Add → Custom domain → `ytplayer.ai-apps.work`
+（zone 已在同帳號即可直接掛；workers.dev 網址仍然有效）
 
 ### 翻譯用法
 

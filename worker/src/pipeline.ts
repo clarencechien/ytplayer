@@ -206,6 +206,103 @@ export interface PipelineEnv {
   GEMINI_MODEL?: string;
 }
 
+// 清單頁資料：翻好的（有 info.json，缺的話從 bilingual.json 回填）+ 已 ingest 未翻的
+export async function listVideos(
+  env: PipelineEnv
+): Promise<Array<Record<string, unknown>>> {
+  const prefixes: string[] = [];
+  let cursor: string | undefined;
+  do {
+    const res = await env.SUBS.list({ prefix: 'subs/', delimiter: '/', cursor });
+    prefixes.push(...(res.delimitedPrefixes ?? []));
+    cursor = res.truncated ? res.cursor : undefined;
+  } while (cursor);
+
+  const out: Array<Record<string, unknown>> = [];
+  for (const p of prefixes) {
+    const videoId = p.slice('subs/'.length).replace(/\/$/, '');
+    if (!/^[A-Za-z0-9_-]{11}$/.test(videoId)) continue;
+    const info = await env.SUBS.get(`subs/${videoId}/info.json`);
+    if (info) {
+      out.push({ ...(JSON.parse(await info.text()) as Record<string, unknown>), translated: true });
+      continue;
+    }
+    const bil = await env.SUBS.get(`subs/${videoId}/bilingual.json`);
+    if (bil) {
+      // 舊資料回填 info.json
+      const doc = JSON.parse(await bil.text()) as {
+        meta?: { title?: string; channel?: string; durationSec?: number };
+        generatedAt?: string;
+        cues?: unknown[];
+      };
+      const entry = {
+        videoId,
+        title: doc.meta?.title ?? videoId,
+        channel: doc.meta?.channel ?? '',
+        durationSec: doc.meta?.durationSec ?? 0,
+        cueCount: doc.cues?.length ?? 0,
+        generatedAt: doc.generatedAt ?? '',
+      };
+      await env.SUBS.put(`subs/${videoId}/info.json`, JSON.stringify(entry), {
+        httpMetadata: { contentType: 'application/json' },
+      });
+      out.push({ ...entry, translated: true });
+      continue;
+    }
+    if (await env.SUBS.head(`subs/${videoId}/source.json`)) {
+      out.push({ videoId, translated: false });
+    }
+  }
+  out.sort((a, b) => String(b.generatedAt ?? '').localeCompare(String(a.generatedAt ?? '')));
+  return out;
+}
+
+// Cron 佇列：掃 R2 找「有 source.json 但 bilingual.json 缺少或過期」的 Tier 2 影片，
+// 一次 cron 只翻一支（單支約 1–2 分鐘，避免 scheduled 事件跑太長）。
+// 併發保護：.translating 鎖檔，10 分鐘視為 stale。
+export async function translateNextPending(
+  env: PipelineEnv,
+  llmOverride?: LlmFn
+): Promise<{ translated?: string; status?: number; scanned: number }> {
+  const prefixes: string[] = [];
+  let cursor: string | undefined;
+  do {
+    const res = await env.SUBS.list({ prefix: 'subs/', delimiter: '/', cursor });
+    prefixes.push(...(res.delimitedPrefixes ?? []));
+    cursor = res.truncated ? res.cursor : undefined;
+  } while (cursor);
+
+  let scanned = 0;
+  for (const p of prefixes) {
+    const videoId = p.slice('subs/'.length).replace(/\/$/, '');
+    if (!/^[A-Za-z0-9_-]{11}$/.test(videoId)) continue;
+    scanned++;
+
+    const srcHead = await env.SUBS.head(`subs/${videoId}/source.json`);
+    if (!srcHead) continue;
+    const bilHead = await env.SUBS.head(`subs/${videoId}/bilingual.json`);
+    if (bilHead && bilHead.uploaded >= srcHead.uploaded) continue; // 已是最新
+
+    // tier 先讀出來，非 2 直接跳過（不佔鎖、不進 pipeline）
+    const srcObj = await env.SUBS.get(`subs/${videoId}/source.json`);
+    if (!srcObj) continue;
+    const tier = (JSON.parse(await srcObj.text()) as { tier?: number }).tier;
+    if (tier !== 2) continue;
+
+    const lock = await env.SUBS.head(`subs/${videoId}/.translating`);
+    if (lock && Date.now() - lock.uploaded.getTime() < 10 * 60 * 1000) continue; // 有人在翻
+
+    await env.SUBS.put(`subs/${videoId}/.translating`, new Date().toISOString());
+    try {
+      const r = await runPipeline(env, videoId, true, llmOverride);
+      return { translated: videoId, status: r.status, scanned };
+    } finally {
+      await env.SUBS.delete(`subs/${videoId}/.translating`);
+    }
+  }
+  return { scanned };
+}
+
 export async function runPipeline(
   env: PipelineEnv,
   videoId: string,
@@ -310,6 +407,19 @@ export async function runPipeline(
   await env.SUBS.put(`subs/${videoId}/bilingual.srt`, toSrt(cues), {
     httpMetadata: { contentType: 'text/plain; charset=utf-8' },
   });
+  // 小的 info.json 給清單頁用（避免列清單時整包 bilingual 讀出來）
+  await env.SUBS.put(
+    `subs/${videoId}/info.json`,
+    JSON.stringify({
+      videoId,
+      title: src.meta.title,
+      channel: src.meta.channel,
+      durationSec: src.meta.durationSec,
+      cueCount: cues.length,
+      generatedAt: bilingual.generatedAt,
+    }),
+    { httpMetadata: { contentType: 'application/json' } }
+  );
 
   const stats: PipelineStats = {
     sentences: sentences.length,

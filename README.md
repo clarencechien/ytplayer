@@ -17,6 +17,6 @@
 | 0 | 可行性驗證（caption track、CORS） | 🟢 決策問題已全數有答案 — 見 [docs/phase0-findings.md](docs/phase0-findings.md)。結論：ext 必要；timedtext 有 POT 防護，ingest 改走「攔截播放器請求」路徑，待 probe2 最終確認 |
 | 1 | Chrome ext（ingest，攔截式）+ Worker `/ingest` | 🟢 實機 ingest 成功（SpaceX 707 cues）；驗收剩：三支影片 + cue 抽查 + SPA 切換 |
 | 2 | 翻譯 pipeline（斷句 / glossary / 分塊翻譯）— 只處理 Tier 2 | 🟡 程式完成（31 tests）：`POST /translate/{videoId}`，Gemini 3.5 Flash — 待 GEMINI_API_KEY + Tier 2 影片實跑與品質驗收 |
-| 3 | Player 頁（iframe API + 字幕層） | ⬜ |
+| 3 | Player 頁（iframe API + 字幕層） | 🟡 完成待驗收：`/watch/{videoId}` + 清單頁 `/`，樣式借鏡 kvsplayer、中英同級；驗收 = 完整看完一支 20 分鐘影片 |
 | 2.5 | ASR 修稿 pipeline（僅英文來源；Phase 3 之後） | ⬜ |
 | 4 | 品質迭代（選作）+ tier 分佈統計 | ⬜ |
