@@ -48,25 +48,49 @@ describe('segmentCues', () => {
     expect(segmentCues(cues).length).toBe(2);
   });
 
-  it('CJK 無標點輸入（歌詞）靠字元數上限切，不會糊成一句', () => {
-    // 模擬日文歌詞軌：每句 10 個假名、無標點、無時間 gap
+  it('逐行模式：整條軌幾乎無句尾標點（歌詞）→ 一 cue 一句、時間軸原封不動', () => {
     const cues: Cue[] = Array.from({ length: 12 }, (_, i) => ({
       start: i * 3,
       dur: 3,
-      text: 'あなたのことを想ってる',
+      text: `歌詞第${i}行 あなたのこと`,
     }));
     const s = segmentCues(cues);
-    expect(s.length).toBeGreaterThan(1); // v3 以前這會糊成一整句
-    const covered = s.flatMap((x) => x.cueIds);
-    expect(covered).toEqual([...Array(cues.length).keys()]);
+    expect(s.length).toBe(12); // 尊重原始斷行
+    expect(s[5]).toEqual({ id: 5, text: '歌詞第5行 あなたのこと', cueIds: [5] });
   });
 
-  it('CJK 句尾標點（。！？）也算句子邊界', () => {
+  it('逐行模式：空白 cue 剔除且 id 連續', () => {
+    const cues: Cue[] = [
+      { start: 0, dur: 2, text: 'line one' },
+      { start: 2, dur: 2, text: '   ' },
+      { start: 4, dur: 2, text: 'line two' },
+    ];
+    const s = segmentCues(cues);
+    expect(s.map((x) => x.id)).toEqual([0, 1]);
+    expect(s[1]).toEqual({ id: 1, text: 'line two', cueIds: [2] });
+  });
+
+  it('CJK 句尾標點（。！？）也算句子邊界（合併模式）', () => {
     const cues: Cue[] = [
       { start: 0, dur: 2, text: '今日はいい天気ですね。' },
       { start: 2, dur: 2, text: '散歩に行きましょう！' },
     ];
     expect(segmentCues(cues).length).toBe(2);
+  });
+
+  it('合併模式下，長段無標點的 CJK 仍有字元數上限兜底', () => {
+    // 前段有標點（ratio 過門檻）、後段一長串無標點 CJK
+    const cues: Cue[] = [
+      { start: 0, dur: 1, text: '大家好。' },
+      { start: 1, dur: 1, text: '今天聊聊晶圓製造！' },
+      ...Array.from({ length: 8 }, (_, i) => ({
+        start: 2 + i,
+        dur: 1,
+        text: '這是一段完全沒有標點的長句內容持續不斷',
+      })),
+    ];
+    const s = segmentCues(cues);
+    expect(s.length).toBeGreaterThan(3); // 後段被字元上限切開，沒有糊成一句
   });
 
   it('超過 60 詞硬切防跑飛', () => {

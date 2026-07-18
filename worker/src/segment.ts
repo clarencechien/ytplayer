@@ -19,6 +19,16 @@ const MAX_CJK_CHARS = 60;
 const cjkCount = (s: string): number => (s.match(/[぀-ヿ㐀-鿿가-힯]/g) ?? []).length;
 
 export function segmentCues(cues: Cue[]): Sentence[] {
+  // 軌型態偵測：整條軌幾乎沒有句尾標點（歌詞、逐行字幕）→ 合併沒有依據，
+  // 尊重原始斷行與時間軸，一 cue 一句（原始 cue 邊界本身就是創作者的斷句資訊）
+  const punctRatio = cues.filter((c) => SENTENCE_END.test(c.text.trim())).length / Math.max(1, cues.length);
+  if (punctRatio < 0.1) {
+    return cues
+      .map((c, i) => ({ id: i, text: c.text.replace(/\s+/g, ' ').trim(), cueIds: [i] }))
+      .filter((s) => s.text.length > 0)
+      .map((s, id) => ({ ...s, id }));
+  }
+
   const sentences: Sentence[] = [];
   let buf: string[] = [];
   let ids: number[] = [];
