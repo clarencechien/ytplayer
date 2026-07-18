@@ -86,7 +86,7 @@ describe('runPipeline（整合）', () => {
       end: 6,
       en: 'Agents are moving to production today.',
       zh: '中文1。',
-      note: '能自主完成任務的 AI 程式',
+      note: 'Agent：能自主完成任務的 AI 程式',
     });
     expect(SUBS.store.get('subs/ksfm6jeTg3Q/bilingual.srt')!.value).toContain('中文0。\nHello everyone.');
     expect(SUBS.store.has('subs/ksfm6jeTg3Q/sentences.json')).toBe(true);

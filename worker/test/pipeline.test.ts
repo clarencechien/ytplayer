@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest';
 import {
   cleanJson,
   scanBanned,
+  cleanAsrText,
   chunkSentences,
   translateChunk,
   repairChunk,
@@ -31,6 +32,23 @@ describe('scanBanned', () => {
   it('抓中國用語、放過台灣用語', () => {
     expect(scanBanned('這個視頻的質量很好')).toEqual(['視頻', '質量']);
     expect(scanBanned('這支影片的品質很好，軟體與硬體都讚')).toEqual([]);
+  });
+  it('物理的質量（mass）是正確用法，不誤傷', () => {
+    expect(scanBanned('龐大的質量流量（Mass flow）與能量')).toEqual([]);
+    expect(scanBanned('火箭的質量（Mass）非常大')).toEqual([]);
+    expect(scanBanned('質量流量很大，但翻譯質量很差')).toEqual(['質量']);
+  });
+});
+
+describe('cleanAsrText', () => {
+  it('去除 [標記] 與 >> 記號，摺疊空白', () => {
+    expect(cleanAsrText('When dealing [music] with rockets')).toBe('When dealing with rockets');
+    expect(cleanAsrText('>> Hello there')).toBe('Hello there');
+    expect(cleanAsrText('so >> what now')).toBe('so what now');
+  });
+  it('純雜訊句清成空字串（上游會整句移除）', () => {
+    expect(cleanAsrText('>> [music]')).toBe('');
+    expect(cleanAsrText('[cheering] [applause]')).toBe('');
   });
 });
 
@@ -118,25 +136,26 @@ describe('attachGlossaryNotes', () => {
     { start: 4, end: 6, en: 'More guardrails talk.', zh: '更多 Guardrails 的討論。' },
   ];
 
-  it('術語第一次出現的句子拿到白話註（只一次）', () => {
+  it('術語第一次出現的句子拿到「呈現形式：解釋」格式的註（只一次）', () => {
     const cues = mkCues();
     const added = attachGlossaryNotes(cues, [
       { term: 'guardrails', zh: '護欄機制（Guardrails）', note: '限制 AI 行為範圍的安全機制' },
     ]);
     expect(added).toBe(1);
-    expect(cues[1].note).toBe('限制 AI 行為範圍的安全機制');
+    expect(cues[1].note).toBe('護欄機制（Guardrails）：限制 AI 行為範圍的安全機制');
     expect(cues[2].note).toBeUndefined();
   });
 
-  it('純中文呈現的術語不需要註；已有譯註不覆蓋', () => {
+  it('純中文呈現的術語不需要註；首句已有譯註 → 退到下一句含該術語的句子', () => {
     const cues = mkCues();
     cues[1].note = '既有譯註';
     const added = attachGlossaryNotes(cues, [
       { term: 'guardrails', zh: '護欄機制（Guardrails）', note: '解釋' },
       { term: 'intro', zh: '開場', note: '不該出現' },
     ]);
-    expect(added).toBe(0);
+    expect(added).toBe(1);
     expect(cues[1].note).toBe('既有譯註');
+    expect(cues[2].note).toBe('護欄機制（Guardrails）：解釋'); // 退位到第二次出現
     expect(cues[0].note).toBeUndefined();
   });
 
@@ -146,7 +165,7 @@ describe('attachGlossaryNotes', () => {
       { term: 'harness / guardrails', zh: 'Harness', note: '外部控制框架' },
     ]);
     expect(added).toBe(1);
-    expect(cues[1].note).toBe('外部控制框架');
+    expect(cues[1].note).toBe('Harness：外部控制框架');
   });
 });
 
