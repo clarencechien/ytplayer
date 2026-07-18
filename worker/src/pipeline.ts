@@ -50,6 +50,9 @@ export function cleanJson(text: string): unknown {
   const first = text.indexOf('[');
   const last = text.lastIndexOf(']');
   if (first >= 0 && last > first) candidates.push(text.slice(first, last + 1));
+  // 輸出中途被截斷（maxOutputTokens 等）：砍到最後一個完整物件再補右括號，救回部分結果
+  const lastBrace = text.lastIndexOf('}');
+  if (first >= 0 && lastBrace > first) candidates.push(text.slice(first, lastBrace + 1) + ']');
   for (const c of candidates) {
     try {
       return JSON.parse(c);
@@ -57,7 +60,7 @@ export function cleanJson(text: string): unknown {
       /* 換下一個候選 */
     }
   }
-  throw new Error('LLM 輸出無法解析為 JSON');
+  throw new Error(`LLM 輸出無法解析為 JSON（開頭：${text.slice(0, 80).replace(/\s+/g, ' ')}…）`);
 }
 
 export function scanBanned(zh: string): string[] {
@@ -95,6 +98,7 @@ export function chunkSentences(sentences: Sentence[], size = 40, overlap = 2): T
 export interface ChunkOutcome {
   byId: Map<number, { zh: string; note?: string }>;
   retries: number;
+  problems: string[];
 }
 
 function parseChunkOutput(raw: string, expected: Set<number>): Map<number, { zh: string; note?: string }> {
@@ -156,11 +160,13 @@ export async function translateChunk(
   meta: PromptMeta,
   glossary: GlossaryEntry[],
   chunk: TranslateChunkInput,
-  sourceLang = 'en'
+  sourceLang = 'en',
+  depth = 0
 ): Promise<ChunkOutcome> {
   const expected = new Set(chunk.target.map((s) => s.id));
   let byId = new Map<number, { zh: string; note?: string }>();
   let retries = 0;
+  const problems: string[] = [];
   let lastProblem = '';
 
   // 最多兩輪：第一輪正常打，缺句/解析失敗再打一輪
@@ -176,6 +182,31 @@ export async function translateChunk(
       lastProblem = e instanceof Error ? e.message : String(e);
     }
   }
+
+  // 兩輪仍缺句：切半分治一次（對付輸出截斷與單點毒句 — 整包重打救不了這兩種）
+  if (byId.size < expected.size && depth === 0 && chunk.target.length > 10) {
+    const mid = Math.ceil(chunk.target.length / 2);
+    const firstHalf: TranslateChunkInput = {
+      before: chunk.before,
+      target: chunk.target.slice(0, mid),
+      after: chunk.target.slice(mid, mid + 2),
+    };
+    const secondHalf: TranslateChunkInput = {
+      before: chunk.target.slice(Math.max(0, mid - 2), mid),
+      target: chunk.target.slice(mid),
+      after: chunk.after,
+    };
+    const [a, b] = await Promise.all([
+      translateChunk(llm, meta, glossary, firstHalf, sourceLang, 1),
+      translateChunk(llm, meta, glossary, secondHalf, sourceLang, 1),
+    ]);
+    retries += a.retries + b.retries + 1;
+    problems.push(...a.problems, ...b.problems);
+    for (const m of [a.byId, b.byId]) {
+      for (const [id, v] of m) if (!byId.has(id)) byId.set(id, v);
+    }
+  }
+  if (byId.size < expected.size) problems.push(`缺 ${expected.size - byId.size} 句：${lastProblem}`);
 
   // 禁用詞：命中則整個 chunk 帶提示重打一次，取「覆蓋不變差且命中較少」的結果
   const hits = [...byId.values()].flatMap((v) => scanBanned(v.zh));
@@ -195,7 +226,7 @@ export async function translateChunk(
     }
   }
 
-  return { byId, retries };
+  return { byId, retries, problems };
 }
 
 // --- 組裝 ---
@@ -445,7 +476,7 @@ export async function runPipeline(
   const baseLlm = llmOverride ?? (await import('./llm')).geminiGenerate.bind(null, env.GEMINI_API_KEY!, model);
   let sentences = segmentCues(src.cues);
   const chunkCount = chunkSentences(sentences).length;
-  const maxCalls = 4 + chunkCount * (needRepair ? 5 : 3);
+  const maxCalls = 6 + chunkCount * (needRepair ? 9 : 7); // 含切半分治的預算
   const llm: LlmFn = (prompt) => {
     if (++llmCalls > maxCalls) throw new Error(`LLM 呼叫超過上限 ${maxCalls} 次，中止（防重試失控）`);
     return baseLlm(prompt);
@@ -528,8 +559,10 @@ export async function runPipeline(
   await Promise.all(workers);
 
   const byId = new Map<number, { zh: string; note?: string }>();
-  for (const o of outcomes) {
+  for (let i = 0; i < outcomes.length; i++) {
+    const o = outcomes[i];
     retries += o.retries;
+    if (o.problems.length > 0) warnings.push(`chunk ${i + 1}/${outcomes.length}：${o.problems.join('；')}`);
     for (const [id, v] of o.byId) byId.set(id, v);
   }
 

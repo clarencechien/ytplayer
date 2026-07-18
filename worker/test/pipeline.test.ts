@@ -26,6 +26,12 @@ describe('cleanJson', () => {
   it('無法解析就丟錯', () => {
     expect(() => cleanJson('完全不是 JSON')).toThrow();
   });
+  it('中途截斷的 JSON 救回已完整的部分', () => {
+    expect(cleanJson('[{"id":0,"zh":"甲"},{"id":1,"zh":"乙"},{"id":2,"zh":"丙')).toEqual([
+      { id: 0, zh: '甲' },
+      { id: 1, zh: '乙' },
+    ]);
+  });
 });
 
 describe('scanBanned', () => {
@@ -102,6 +108,28 @@ describe('translateChunk', () => {
     const r = await translateChunk(llm, meta, [], chunk);
     expect(r.retries).toBe(1);
     expect(r.byId.get(0)?.zh).toBe('這支影片很棒');
+  });
+
+  it('整包兩次失敗 → 切半分治救回（>10 句才切）', async () => {
+    const big = { before: [], target: Array.from({ length: 12 }, (_, i) => sent(i)), after: [] };
+    const llm = async (prompt: string) => {
+      const ids = [...prompt.matchAll(/^(\d+): /gm)].map((m) => Number(m[1]));
+      if (ids.length > 6) return '整包壞掉不是 JSON'; // 大包一律失敗
+      return JSON.stringify(ids.map((id) => ({ id, zh: `中${id}` })));
+    };
+    const r = await translateChunk(llm, meta, [], big);
+    expect(r.byId.size).toBe(12); // 兩半各自成功
+    expect(r.problems).toEqual([]);
+    expect(r.retries).toBeGreaterThan(0);
+  });
+
+  it('分治後仍缺 → problems 記載原因', async () => {
+    const big = { before: [], target: Array.from({ length: 12 }, (_, i) => sent(i)), after: [] };
+    const llm = async () => '永遠壞掉';
+    const r = await translateChunk(llm, meta, [], big);
+    expect(r.byId.size).toBe(0);
+    expect(r.problems.length).toBeGreaterThan(0);
+    expect(r.problems.join(' ')).toContain('缺');
   });
 
   it('多餘的 id 與空 zh 被丟棄', async () => {
