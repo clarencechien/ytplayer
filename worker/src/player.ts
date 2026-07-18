@@ -271,7 +271,7 @@ fetch("/videos.json").then(function (r) { return r.json(); }).then(function (vid
     var s = document.createElement("div"); s.className = "sub";
     s.textContent = v.translated
       ? (v.channel || "") + "・" + v.cueCount + " 句・" + v.videoId
-      : v.videoId + "・⏳ 已 ingest，等 cron 翻譯（或非 Tier 2）";
+      : v.videoId + (v.queued ? "・⏳ 已排入佇列，cron 每 5 分鐘自動翻" : "・🚫 " + (v.reason || "不在自動翻譯範圍"));
     d.appendChild(t); d.appendChild(s);
     if (v.translated) d.onclick = function () { location.href = "/watch/" + v.videoId; };
     box.appendChild(d);

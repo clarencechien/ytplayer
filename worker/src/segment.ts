@@ -9,9 +9,14 @@ export interface Sentence {
   cueIds: number[];
 }
 
-const SENTENCE_END = /[.!?…]["')\]]*$/;
+// 句尾標點含 CJK（。！？、日文引號）；歌詞這類「整片無標點」的輸入
+// 靠時間 gap 與長度上限兜底 — CJK 沒有空白可數詞，改數 CJK 字元
+// （只數 CJK 字，英文照舊走 60 詞上限，不會被誤切）
+const SENTENCE_END = /[.!?…。！？]["')\]」』]*$/;
 const HARD_GAP_SEC = 2;
 const MAX_WORDS = 60;
+const MAX_CJK_CHARS = 60;
+const cjkCount = (s: string): number => (s.match(/[぀-ヿ㐀-鿿가-힯]/g) ?? []).length;
 
 export function segmentCues(cues: Cue[]): Sentence[] {
   const sentences: Sentence[] = [];
@@ -31,8 +36,15 @@ export function segmentCues(cues: Cue[]): Sentence[] {
     ids.push(i);
     const next = cues[i + 1];
     const gap = next ? next.start - (cue.start + cue.dur) : Infinity;
-    const words = buf.join(' ').split(/\s+/).length;
-    if (SENTENCE_END.test(cue.text.trim()) || gap > HARD_GAP_SEC || words >= MAX_WORDS || !next) {
+    const joined = buf.join(' ');
+    const words = joined.split(/\s+/).length;
+    if (
+      SENTENCE_END.test(cue.text.trim()) ||
+      gap > HARD_GAP_SEC ||
+      words >= MAX_WORDS ||
+      cjkCount(joined) >= MAX_CJK_CHARS ||
+      !next
+    ) {
       flush();
     }
   }
