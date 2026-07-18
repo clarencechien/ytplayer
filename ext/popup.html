@@ -20,12 +20,22 @@
     button { width: 100%; padding: 8px; margin-top: 8px; border: 0; border-radius: 6px; background: #59f; color: #000; font-weight: 700; cursor: pointer; }
     button:disabled { background: #444; color: #888; cursor: not-allowed; }
     #result { margin-top: 8px; white-space: pre-wrap; word-break: break-all; }
+    #settings { margin-top: 10px; border-top: 1px solid #333; padding-top: 6px; color: #999; }
+    #settings label { display: block; margin: 6px 0 2px; }
+    #settings input { width: 100%; box-sizing: border-box; background: #2a2a2e; color: #eee; border: 1px solid #444; border-radius: 4px; padding: 4px 6px; }
+    #settings button { margin-top: 6px; }
   </style>
 </head>
 <body>
   <h1>ytplayer ingest</h1>
   <div id="app" class="muted">讀取中…</div>
   <div id="result"></div>
+  <details id="settings">
+    <summary>⚙ 設定</summary>
+    <label>Worker URL <input id="cfg-url" placeholder="https://ytplayer.xxx.workers.dev"></label>
+    <label>INGEST_KEY <input id="cfg-key" type="password" placeholder="與 Worker secret 一致"></label>
+    <button id="cfg-save">儲存</button>
+  </details>
   <script type="module" src="popup.js"></script>
 </body>
 </html>

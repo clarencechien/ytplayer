@@ -34,9 +34,31 @@
 
 | 方法 | 路徑 | 說明 |
 |---|---|---|
-| POST | `/ingest` | 收 ext 的 payload，驗證後存 `subs/{videoId}/source.json`（header `x-ingest-key`） |
-| GET | `/subs/{videoId}/source.json` | 讀回存好的字幕（驗收與後續 Phase 用） |
+| POST | `/ingest` | 收 ext 的 payload，驗證後存 `subs/{videoId}/source.json` |
+| POST | `/translate/{videoId}` | Phase 2 翻譯 pipeline（只吃 Tier 2；`?force=1` 忽略 cache 重跑） |
+| GET | `/subs/{videoId}/{file}` | `source.json` / `sentences.json` / `glossary.json` / `bilingual.json` / `bilingual.srt` |
 | GET | `/` | health / 設定狀態 |
+
+所有端點（除 `/`）都要 header `x-ingest-key`。
+
+### 翻譯用法
+
+```bash
+# 跑翻譯（20 分鐘影片約 1–2 分鐘，同步等）
+curl -X POST -H "x-ingest-key: $KEY" "https://ytplayer.<subdomain>.workers.dev/translate/<videoId>"
+# 拿結果
+curl -H "x-ingest-key: $KEY" "https://ytplayer.<subdomain>.workers.dev/subs/<videoId>/bilingual.srt"
+```
+
+回應的 `stats.warnings` 必須為空才算驗收通過（禁用詞殘留、翻譯失敗都會列在裡面）。
+
+### Secrets / Vars
+
+| 名稱 | 類型 | 用途 |
+|---|---|---|
+| `INGEST_KEY` | Secret | 所有寫入/讀取的認證（**Settings → Variables and Secrets**，不是 Builds 的環境變數） |
+| `GEMINI_API_KEY` | Secret | 翻譯模型（aistudio.google.com 取得） |
+| `GEMINI_MODEL` | Var（wrangler.jsonc） | 預設 `gemini-3.5-flash`，要換不用改程式 |
 
 ## 本機開發
 

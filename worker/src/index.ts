@@ -9,10 +9,13 @@
 // 未設定 secret 時放行但在回應中警告（讓「連結 GitHub 即可用」成立，設了就鎖）。
 
 import { validateIngest } from './validate';
+import { runPipeline } from './pipeline';
 
 export interface Env {
   SUBS: R2Bucket;
   INGEST_KEY?: string;
+  GEMINI_API_KEY?: string;
+  GEMINI_MODEL?: string;
 }
 
 // ext popup 與（未來的）player 頁都以跨域 fetch 存取，統一開 CORS，安全性由 key 把關
@@ -64,13 +67,24 @@ export default {
       return json({ ok: true, key, cueCount: p.cues.length, warning });
     }
 
-    const m = url.pathname.match(/^\/subs\/([A-Za-z0-9_-]{11})\/source\.json$/);
-    if (req.method === 'GET' && m) {
-      const obj = await env.SUBS.get(`subs/${m[1]}/source.json`);
+    // Phase 2：翻譯 pipeline（同步跑完，20 分鐘影片約 1–2 分鐘）
+    const t = url.pathname.match(/^\/translate\/([A-Za-z0-9_-]{11})$/);
+    if (req.method === 'POST' && t) {
+      try {
+        const { status, body } = await runPipeline(env, t[1], url.searchParams.get('force') === '1');
+        return json(body, status);
+      } catch (e) {
+        return json({ ok: false, error: e instanceof Error ? e.message : String(e) }, 500);
+      }
+    }
+
+    const FILES = ['source.json', 'sentences.json', 'glossary.json', 'bilingual.json', 'bilingual.srt'];
+    const m = url.pathname.match(/^\/subs\/([A-Za-z0-9_-]{11})\/([a-z.]+)$/);
+    if (req.method === 'GET' && m && FILES.includes(m[2])) {
+      const obj = await env.SUBS.get(`subs/${m[1]}/${m[2]}`);
       if (!obj) return json({ ok: false, error: 'not found' }, 404);
-      return new Response(obj.body, {
-        headers: { 'content-type': 'application/json; charset=utf-8', ...CORS },
-      });
+      const contentType = m[2].endsWith('.srt') ? 'text/plain; charset=utf-8' : 'application/json; charset=utf-8';
+      return new Response(obj.body, { headers: { 'content-type': contentType, ...CORS } });
     }
 
     return json({ ok: false, error: 'not found' }, 404);
