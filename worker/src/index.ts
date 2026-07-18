@@ -34,20 +34,21 @@ const json = (data: unknown, status = 200): Response =>
 export default {
   async fetch(req: Request, env: Env): Promise<Response> {
     const url = new URL(req.url);
+    const path = url.pathname.replace(/\/+$/, '') || '/'; // 尾端斜線容錯
 
     if (req.method === 'OPTIONS') return new Response(null, { status: 204, headers: CORS });
 
+    // 讀取公開（字幕非敏感資料，player 頁也要直接讀）；寫入／翻譯才要 key
     const keyConfigured = typeof env.INGEST_KEY === 'string' && env.INGEST_KEY.length > 0;
-    if (keyConfigured && req.headers.get('x-ingest-key') !== env.INGEST_KEY) {
-      return json({ ok: false, error: 'unauthorized' }, 403);
-    }
+    const authorized = !keyConfigured || req.headers.get('x-ingest-key') === env.INGEST_KEY;
     const warning = keyConfigured ? undefined : '尚未設定 INGEST_KEY secret，任何人都可寫入';
 
-    if (req.method === 'GET' && url.pathname === '/') {
+    if (req.method === 'GET' && path === '/') {
       return json({ service: 'ytplayer', ok: true, ingestKeyConfigured: keyConfigured });
     }
 
-    if (req.method === 'POST' && url.pathname === '/ingest') {
+    if (req.method === 'POST' && path === '/ingest') {
+      if (!authorized) return json({ ok: false, error: 'unauthorized' }, 403);
       const text = await req.text();
       if (text.length > 8_000_000) return json({ ok: false, error: 'payload 超過 8MB' }, 413);
       let payload: unknown;
@@ -68,8 +69,9 @@ export default {
     }
 
     // Phase 2：翻譯 pipeline（同步跑完，20 分鐘影片約 1–2 分鐘）
-    const t = url.pathname.match(/^\/translate\/([A-Za-z0-9_-]{11})$/);
+    const t = path.match(/^\/translate\/([A-Za-z0-9_-]{11})$/);
     if (req.method === 'POST' && t) {
+      if (!authorized) return json({ ok: false, error: 'unauthorized' }, 403);
       try {
         const { status, body } = await runPipeline(env, t[1], url.searchParams.get('force') === '1');
         return json(body, status);
@@ -79,7 +81,7 @@ export default {
     }
 
     const FILES = ['source.json', 'sentences.json', 'glossary.json', 'bilingual.json', 'bilingual.srt'];
-    const m = url.pathname.match(/^\/subs\/([A-Za-z0-9_-]{11})\/([a-z.]+)$/);
+    const m = path.match(/^\/subs\/([A-Za-z0-9_-]{11})\/([a-z.]+)$/);
     if (req.method === 'GET' && m && FILES.includes(m[2])) {
       const obj = await env.SUBS.get(`subs/${m[1]}/${m[2]}`);
       if (!obj) return json({ ok: false, error: 'not found' }, 404);
