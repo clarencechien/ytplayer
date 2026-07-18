@@ -4,9 +4,12 @@ import {
   scanBanned,
   chunkSentences,
   translateChunk,
+  repairChunk,
   assembleBilingual,
+  attachGlossaryNotes,
   toSrt,
 } from '../src/pipeline';
+import type { BilingualCue } from '../src/pipeline';
 import type { Sentence } from '../src/segment';
 import type { Cue } from '../src/validate';
 
@@ -87,6 +90,63 @@ describe('translateChunk', () => {
     const llm = async () => '[{"id":0,"zh":"零"},{"id":1,"zh":"一"},{"id":99,"zh":"多的"},{"id":1,"zh":""}]';
     const r = await translateChunk(llm, meta, [], chunk);
     expect([...r.byId.keys()].sort()).toEqual([0, 1]);
+  });
+});
+
+describe('repairChunk', () => {
+  const chunk = { before: [], target: [sent(0, 'when your dealing [music] with rockets'), sent(1, 'ok.')], after: [] };
+
+  it('修稿成功：取代原文', async () => {
+    const llm = async () => '[{"id":0,"en":"When you\'re dealing with rockets."},{"id":1,"en":"OK."}]';
+    const r = await repairChunk(llm, meta, chunk);
+    expect(r.byId.get(0)).toBe("When you're dealing with rockets.");
+    expect(r.retries).toBe(0);
+  });
+
+  it('缺句重試一次；仍缺回傳部分結果', async () => {
+    const llm = async () => '[{"id":0,"en":"fixed."}]';
+    const r = await repairChunk(llm, meta, chunk);
+    expect(r.retries).toBe(1);
+    expect(r.byId.size).toBe(1);
+  });
+});
+
+describe('attachGlossaryNotes', () => {
+  const mkCues = (): BilingualCue[] => [
+    { start: 0, end: 2, en: 'Intro sentence.', zh: '開場。' },
+    { start: 2, end: 4, en: 'We added guardrails here.', zh: '我們加了護欄機制（Guardrails）。' },
+    { start: 4, end: 6, en: 'More guardrails talk.', zh: '更多 Guardrails 的討論。' },
+  ];
+
+  it('術語第一次出現的句子拿到白話註（只一次）', () => {
+    const cues = mkCues();
+    const added = attachGlossaryNotes(cues, [
+      { term: 'guardrails', zh: '護欄機制（Guardrails）', note: '限制 AI 行為範圍的安全機制' },
+    ]);
+    expect(added).toBe(1);
+    expect(cues[1].note).toBe('限制 AI 行為範圍的安全機制');
+    expect(cues[2].note).toBeUndefined();
+  });
+
+  it('純中文呈現的術語不需要註；已有譯註不覆蓋', () => {
+    const cues = mkCues();
+    cues[1].note = '既有譯註';
+    const added = attachGlossaryNotes(cues, [
+      { term: 'guardrails', zh: '護欄機制（Guardrails）', note: '解釋' },
+      { term: 'intro', zh: '開場', note: '不該出現' },
+    ]);
+    expect(added).toBe(0);
+    expect(cues[1].note).toBe('既有譯註');
+    expect(cues[0].note).toBeUndefined();
+  });
+
+  it('term 含多形式（a / b）逐一嘗試', () => {
+    const cues = mkCues();
+    const added = attachGlossaryNotes(cues, [
+      { term: 'harness / guardrails', zh: 'Harness', note: '外部控制框架' },
+    ]);
+    expect(added).toBe(1);
+    expect(cues[1].note).toBe('外部控制框架');
   });
 });
 

@@ -9,14 +9,15 @@ import {
   BANNED_WORDS,
   buildGlossaryPrompt,
   buildTranslatePrompt,
+  buildRepairPrompt,
   type PromptMeta,
   type TranslateChunkInput,
 } from './prompts';
 
 export interface GlossaryEntry {
   term: string;
-  suggested_zh: string;
-  note?: string;
+  zh: string; // 呈現形式：「中文（English）」／保留英文／純中文
+  note?: string; // 給非本科觀眾的白話解釋（30 字內）
 }
 
 export interface BilingualCue {
@@ -32,6 +33,8 @@ export interface PipelineStats {
   sentences: number;
   chunks: number;
   glossaryTerms: number;
+  asrRepaired: number;
+  autoNotes: number;
   llmCalls: number;
   retries: number;
   untranslated: number;
@@ -93,11 +96,46 @@ function parseChunkOutput(raw: string, expected: Set<number>): Map<number, { zh:
       typeof it.zh === 'string' &&
       it.zh.trim().length > 0
     ) {
-      const note = typeof it.note === 'string' && it.note.trim() ? it.note.trim().slice(0, 40) : undefined;
+      const note = typeof it.note === 'string' && it.note.trim() ? it.note.trim().slice(0, 60) : undefined;
       byId.set(it.id, { zh: it.zh.trim(), note });
     }
   }
   return byId;
+}
+
+// Phase 2.5 — 英文 ASR 修稿一個 chunk（缺句/解析失敗重試一次，仍缺的句子保留原文）
+export async function repairChunk(
+  llm: LlmFn,
+  meta: PromptMeta,
+  chunk: TranslateChunkInput
+): Promise<{ byId: Map<number, string>; retries: number }> {
+  const expected = new Set(chunk.target.map((s) => s.id));
+  const parse = (raw: string): Map<number, string> => {
+    const arr = cleanJson(raw);
+    if (!Array.isArray(arr)) throw new Error('輸出不是 JSON 陣列');
+    const byId = new Map<number, string>();
+    for (const it of arr) {
+      if (it && typeof it.id === 'number' && expected.has(it.id) && typeof it.en === 'string' && it.en.trim()) {
+        byId.set(it.id, it.en.trim());
+      }
+    }
+    return byId;
+  };
+  let byId = new Map<number, string>();
+  let retries = 0;
+  let lastProblem = '';
+  for (let attempt = 0; attempt < 2 && byId.size < expected.size; attempt++) {
+    if (attempt > 0) retries++;
+    const hint = attempt > 0 ? `上一次輸出有問題（${lastProblem}）。務必輸出純 JSON，且涵蓋所有 id。` : undefined;
+    try {
+      const parsed = parse(await llm(buildRepairPrompt(meta, chunk, hint)));
+      if (parsed.size > byId.size) byId = parsed;
+      if (byId.size < expected.size) lastProblem = `預期 ${expected.size} 句只得到 ${byId.size} 句`;
+    } catch (e) {
+      lastProblem = e instanceof Error ? e.message : String(e);
+    }
+  }
+  return { byId, retries };
 }
 
 export async function translateChunk(
@@ -174,6 +212,29 @@ export function assembleBilingual(
   return { cues: out, untranslated, bannedHits: [...new Set(bannedHits)] };
 }
 
+// 術語第一次出現時，把 glossary 的白話註解附到該句（deterministic — chunk 平行翻譯，
+// 模型不知道全片第一次出現在哪，這件事只能程式做。原則 #2：程式碼管品質地板）。
+// 只補「呈現形式含英文」的術語（純中文呈現如「推論」不需要解釋），且不覆蓋既有譯註。
+export function attachGlossaryNotes(cues: BilingualCue[], glossary: GlossaryEntry[]): number {
+  let added = 0;
+  for (const g of glossary) {
+    if (!g.note || !/[A-Za-z]/.test(g.zh)) continue;
+    // term 可能是 "harness / harness layer" 這種多形式，逐一嘗試
+    const variants = g.term.split('/').map((v) => v.trim()).filter(Boolean);
+    let target: BilingualCue | undefined;
+    for (const v of variants) {
+      const re = new RegExp(`\\b${v.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`, 'i');
+      target = cues.find((c) => !c.untranslated && re.test(c.en));
+      if (target) break;
+    }
+    if (target && !target.note) {
+      target.note = g.note.slice(0, 60);
+      added++;
+    }
+  }
+  return added;
+}
+
 const srtTime = (sec: number): string => {
   const ms = Math.max(0, Math.round(sec * 1000));
   const h = String(Math.floor(ms / 3600000)).padStart(2, '0');
@@ -199,6 +260,10 @@ interface SourceDoc {
   track: { languageCode: string };
   cues: Cue[];
 }
+
+// POC 範圍：Tier 2（append-01 §E），加上 Phase 2.5 的「Tier 3 + 英文 ASR」
+export const canTranslate = (src: { tier: number; track: { languageCode: string } }): boolean =>
+  src.tier === 2 || (src.tier === 3 && /^en(-|$)/i.test(src.track.languageCode));
 
 export interface PipelineEnv {
   SUBS: R2Bucket;
@@ -283,11 +348,11 @@ export async function translateNextPending(
     const bilHead = await env.SUBS.head(`subs/${videoId}/bilingual.json`);
     if (bilHead && bilHead.uploaded >= srcHead.uploaded) continue; // 已是最新
 
-    // tier 先讀出來，非 2 直接跳過（不佔鎖、不進 pipeline）
+    // 範圍先讀出來判斷，不符合直接跳過（不佔鎖、不進 pipeline）
     const srcObj = await env.SUBS.get(`subs/${videoId}/source.json`);
     if (!srcObj) continue;
-    const tier = (JSON.parse(await srcObj.text()) as { tier?: number }).tier;
-    if (tier !== 2) continue;
+    const srcDoc = JSON.parse(await srcObj.text()) as { tier: number; track: { languageCode: string } };
+    if (!canTranslate(srcDoc)) continue;
 
     const lock = await env.SUBS.head(`subs/${videoId}/.translating`);
     if (lock && Date.now() - lock.uploaded.getTime() < 10 * 60 * 1000) continue; // 有人在翻
@@ -315,9 +380,13 @@ export async function runPipeline(
   const srcObj = await env.SUBS.get(`subs/${videoId}/source.json`);
   if (!srcObj) return { status: 404, body: { ok: false, error: 'source.json 不存在，請先用 ext ingest' } };
   const src = JSON.parse(await srcObj.text()) as SourceDoc;
-  if (src.tier !== 2) {
-    return { status: 422, body: { ok: false, error: `tier ${src.tier} 不在 POC 範圍（append-01 §E：只處理 Tier 2）` } };
+  if (!canTranslate(src)) {
+    return {
+      status: 422,
+      body: { ok: false, error: `tier ${src.tier}（${src.track.languageCode}）不在範圍：只處理 Tier 2，或 Tier 3 + 英文 ASR（Phase 2.5）` },
+    };
   }
+  const needRepair = src.tier === 3;
   if (!llmOverride && !env.GEMINI_API_KEY) {
     return { status: 500, body: { ok: false, error: '未設定 GEMINI_API_KEY secret' } };
   }
@@ -336,28 +405,66 @@ export async function runPipeline(
   // 防重試失控（原則 §8）：呼叫數硬上限
   let llmCalls = 0;
   const baseLlm = llmOverride ?? (await import('./llm')).geminiGenerate.bind(null, env.GEMINI_API_KEY!, model);
-  const sentences = segmentCues(src.cues);
-  const chunks = chunkSentences(sentences);
-  const maxCalls = 4 + chunks.length * 3;
+  let sentences = segmentCues(src.cues);
+  const chunkCount = chunkSentences(sentences).length;
+  const maxCalls = 4 + chunkCount * (needRepair ? 5 : 3);
   const llm: LlmFn = (prompt) => {
     if (++llmCalls > maxCalls) throw new Error(`LLM 呼叫超過上限 ${maxCalls} 次，中止（防重試失控）`);
     return baseLlm(prompt);
   };
 
-  await env.SUBS.put(`subs/${videoId}/sentences.json`, JSON.stringify({ videoId, sentences }), {
+  let retries = 0;
+  let asrRepaired = 0;
+
+  // Phase 2.5 — Step A'：英文 ASR 修稿（在斷句之後、glossary 之前）
+  if (needRepair) {
+    const rChunks = chunkSentences(sentences);
+    const rOutcomes: Array<{ byId: Map<number, string>; retries: number }> = new Array(rChunks.length);
+    let rNext = 0;
+    await Promise.all(
+      Array.from({ length: Math.min(4, rChunks.length) }, async () => {
+        while (rNext < rChunks.length) {
+          const idx = rNext++;
+          rOutcomes[idx] = await repairChunk(llm, src.meta, rChunks[idx]);
+        }
+      })
+    );
+    const fixedById = new Map<number, string>();
+    for (const o of rOutcomes) {
+      retries += o.retries;
+      for (const [id, en] of o.byId) fixedById.set(id, en);
+    }
+    sentences = sentences.map((s) => {
+      const fixed = fixedById.get(s.id);
+      if (fixed && fixed !== s.text) {
+        asrRepaired++;
+        return { ...s, text: fixed };
+      }
+      return s;
+    });
+  }
+
+  const chunks = chunkSentences(sentences);
+  await env.SUBS.put(`subs/${videoId}/sentences.json`, JSON.stringify({ videoId, asrRepaired, sentences }), {
     httpMetadata: { contentType: 'application/json' },
   });
 
   // Step B — glossary（失敗重試一次，仍失敗就空表繼續並記 warning）
   let glossary: GlossaryEntry[] = [];
   const warnings: string[] = [];
-  let retries = 0;
   for (let attempt = 0; attempt < 2; attempt++) {
     try {
       const parsed = cleanJson(await llm(buildGlossaryPrompt(src.meta, sentences)));
       if (!Array.isArray(parsed)) throw new Error('glossary 不是陣列');
       glossary = parsed
-        .filter((g): g is GlossaryEntry => !!g && typeof g.term === 'string' && typeof g.suggested_zh === 'string')
+        .map(
+          (g): Partial<GlossaryEntry> => ({
+            term: g?.term,
+            zh: g?.zh ?? g?.suggested_zh, // 舊 schema 相容
+            note: typeof g?.note === 'string' && g.note.trim() ? g.note.trim().slice(0, 60) : undefined,
+          })
+        )
+        .filter((g): g is GlossaryEntry => typeof g.term === 'string' && typeof g.zh === 'string')
         .slice(0, 60);
       break;
     } catch (e) {
@@ -390,11 +497,14 @@ export async function runPipeline(
   const { cues, untranslated, bannedHits } = assembleBilingual(sentences, src.cues, byId);
   if (untranslated > 0) warnings.push(`${untranslated} 句翻譯失敗，以英文原文代替（標 untranslated）`);
   if (bannedHits.length > 0) warnings.push(`禁用詞殘留：${bannedHits.join('、')}`);
+  const autoNotes = attachGlossaryNotes(cues, glossary);
 
   const bilingual = {
     videoId,
     meta: src.meta,
     sourceLang: src.track.languageCode,
+    tier: src.tier,
+    asrRepaired,
     model,
     promptVersion: PROMPT_VERSION,
     generatedAt: new Date().toISOString(),
@@ -425,6 +535,8 @@ export async function runPipeline(
     sentences: sentences.length,
     chunks: chunks.length,
     glossaryTerms: glossary.length,
+    asrRepaired,
+    autoNotes,
     llmCalls,
     retries,
     untranslated,
