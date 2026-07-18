@@ -93,6 +93,30 @@ export function chunkSentences(sentences: Sentence[], size = 40, overlap = 2): T
   return chunks;
 }
 
+// --- 逐句 fail-fast 品質檢查（deterministic，不用 LLM 自我審查）---
+// 沒過的句子視同「缺句」，交給既有的重試／切半分治機制救。
+
+// 只收「簡體獨有字形」——繁體也在用的字（行、里、干、据、号…）絕不能放，會誤殺
+const SIMPLIFIED_CHARS =
+  '们这说时发经过还让现观转边远运连达选问间际东车书学习业专众传势军农决义乐买亚会点为张长' +
+  '导语难产严实断继续层岁师带帮开弹当态总恶战户换击敌旧构标欢汉满灭环电监笔类没' +
+  '红纪约级纯纳纸线练组终结绝统维绿网罗罚脑脸节药见规觉览训议记许论设访证评识诉词译试话该详误读调谈谁请诺谢谱' +
+  '贝负贡财责败货质购贴贵费资赛赞软轻载较辉迁违迟适逊递遗释钱铁银错键门闪闹闻阅阵阶陆陈队隐雾' +
+  '须顶项顺顾顿预领题额风飞饭饮马验鱼鸟鸡麦齐';
+
+export function sanityCheckItem(en: string, zh: string): string | null {
+  for (const ch of zh) {
+    if (SIMPLIFIED_CHARS.includes(ch)) return `疑似簡體字（${ch}）`;
+  }
+  const enWords = en.trim().split(/\s+/).length;
+  if (enWords >= 4) {
+    if (!/[぀-ヿ㐀-鿿]/.test(zh)) return '沒有中文（疑似原文照抄）';
+    if (zh.trim() === en.trim()) return '原文照抄';
+  }
+  if (zh.length > en.length * 4 + 30) return '譯文長度異常';
+  return null;
+}
+
 // --- 翻譯一個 chunk（含重試策略）---
 
 export interface ChunkOutcome {
@@ -101,23 +125,46 @@ export interface ChunkOutcome {
   problems: string[];
 }
 
-function parseChunkOutput(raw: string, expected: Set<number>): Map<number, { zh: string; note?: string }> {
+function parseChunkOutput(
+  raw: string,
+  targets: Map<number, string> // id → 原文（fail-fast 檢查用）
+): { byId: Map<number, { zh: string; note?: string }>; rejected: string[] } {
   const arr = cleanJson(raw);
   if (!Array.isArray(arr)) throw new Error('輸出不是 JSON 陣列');
   const byId = new Map<number, { zh: string; note?: string }>();
+  const rejected: string[] = [];
   for (const it of arr) {
     if (
       it &&
       typeof it.id === 'number' &&
-      expected.has(it.id) &&
+      targets.has(it.id) &&
       typeof it.zh === 'string' &&
       it.zh.trim().length > 0
     ) {
+      const zh = it.zh.trim();
+      const reason = sanityCheckItem(targets.get(it.id)!, zh);
+      if (reason) {
+        rejected.push(`#${it.id} ${reason}`);
+        continue; // 視同缺句，交給重試/分治
+      }
       const note = typeof it.note === 'string' && it.note.trim() ? it.note.trim().slice(0, 60) : undefined;
-      byId.set(it.id, { zh: it.zh.trim(), note });
+      byId.set(it.id, { zh, note });
     }
   }
-  return byId;
+  // 崩塌偵測：同一句譯文（≥6 字）出現 3 次以上，只留第一句
+  const dup = new Map<string, number[]>();
+  for (const [id, v] of byId) {
+    if (v.zh.length >= 6) dup.set(v.zh, [...(dup.get(v.zh) ?? []), id]);
+  }
+  for (const [zh, ids] of dup) {
+    if (ids.length >= 3) {
+      for (const id of ids.slice(1)) {
+        byId.delete(id);
+        rejected.push(`#${id} 重複譯文（${zh.slice(0, 12)}…）`);
+      }
+    }
+  }
+  return { byId, rejected };
 }
 
 // Phase 2.5 — 英文 ASR 修稿一個 chunk（缺句/解析失敗重試一次，仍缺的句子保留原文）
@@ -163,28 +210,36 @@ export async function translateChunk(
   sourceLang = 'en',
   depth = 0
 ): Promise<ChunkOutcome> {
-  const expected = new Set(chunk.target.map((s) => s.id));
+  const targets = new Map(chunk.target.map((s) => [s.id, s.text]));
+  const expected = targets.size;
   let byId = new Map<number, { zh: string; note?: string }>();
   let retries = 0;
   const problems: string[] = [];
   let lastProblem = '';
 
-  // 最多兩輪：第一輪正常打，缺句/解析失敗再打一輪
-  for (let attempt = 0; attempt < 2 && byId.size < expected.size; attempt++) {
+  // 最多兩輪：第一輪正常打，缺句/解析失敗/品質檢查未過再打一輪
+  for (let attempt = 0; attempt < 2 && byId.size < expected; attempt++) {
     if (attempt > 0) retries++;
-    const hint = attempt > 0 ? `上一次輸出有問題（${lastProblem}）。務必輸出純 JSON，且涵蓋所有 id。` : undefined;
+    const hint = attempt > 0 ? `上一次輸出有問題（${lastProblem}）。務必輸出純 JSON、繁體中文，且涵蓋所有 id。` : undefined;
     try {
-      const parsed = parseChunkOutput(await llm(buildTranslatePrompt(meta, glossary, chunk, hint, sourceLang)), expected);
+      const { byId: parsed, rejected } = parseChunkOutput(
+        await llm(buildTranslatePrompt(meta, glossary, chunk, hint, sourceLang)),
+        targets
+      );
       // 保留較完整的一輪
       if (parsed.size > byId.size) byId = parsed;
-      if (byId.size < expected.size) lastProblem = `預期 ${expected.size} 句只得到 ${byId.size} 句`;
+      if (byId.size < expected) {
+        lastProblem = rejected.length
+          ? `${rejected.length} 句未過品質檢查：${rejected.slice(0, 3).join('、')}`
+          : `預期 ${expected} 句只得到 ${byId.size} 句`;
+      }
     } catch (e) {
       lastProblem = e instanceof Error ? e.message : String(e);
     }
   }
 
   // 兩輪仍缺句：切半分治一次（對付輸出截斷與單點毒句 — 整包重打救不了這兩種）
-  if (byId.size < expected.size && depth === 0 && chunk.target.length > 10) {
+  if (byId.size < expected && depth === 0 && chunk.target.length > 10) {
     const mid = Math.ceil(chunk.target.length / 2);
     const firstHalf: TranslateChunkInput = {
       before: chunk.before,
@@ -206,18 +261,18 @@ export async function translateChunk(
       for (const [id, v] of m) if (!byId.has(id)) byId.set(id, v);
     }
   }
-  if (byId.size < expected.size) problems.push(`缺 ${expected.size - byId.size} 句：${lastProblem}`);
+  if (byId.size < expected) problems.push(`缺 ${expected - byId.size} 句：${lastProblem}`);
 
   // 禁用詞：命中則整個 chunk 帶提示重打一次，取「覆蓋不變差且命中較少」的結果
   const hits = [...byId.values()].flatMap((v) => scanBanned(v.zh));
   if (hits.length > 0) {
     retries++;
     try {
-      const again = parseChunkOutput(
+      const { byId: again } = parseChunkOutput(
         await llm(
           buildTranslatePrompt(meta, glossary, chunk, `上一次譯文出現禁用的中國用語：${[...new Set(hits)].join('、')}。全部改為台灣慣用詞。`, sourceLang)
         ),
-        expected
+        targets
       );
       const againHits = [...again.values()].flatMap((v) => scanBanned(v.zh));
       if (again.size >= byId.size && againHits.length < hits.length) byId = again;
