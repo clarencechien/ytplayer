@@ -7,6 +7,7 @@ import type { LlmFn } from './llm';
 import {
   PROMPT_VERSION,
   BANNED_WORDS,
+  BANNED_EXCEPTIONS,
   buildGlossaryPrompt,
   buildTranslatePrompt,
   buildRepairPrompt,
@@ -60,7 +61,19 @@ export function cleanJson(text: string): unknown {
 }
 
 export function scanBanned(zh: string): string[] {
-  return BANNED_WORDS.filter(([bad]) => zh.includes(bad)).map(([bad]) => bad);
+  return BANNED_WORDS.filter(([bad]) => {
+    const cleaned = BANNED_EXCEPTIONS[bad] ? zh.replace(BANNED_EXCEPTIONS[bad], '') : zh;
+    return cleaned.includes(bad);
+  }).map(([bad]) => bad);
+}
+
+// ASR 雜訊的 deterministic 清除（不能靠 LLM 保證）：[music]/[applause] 標記、「>>」換人說話記號
+export function cleanAsrText(text: string): string {
+  return text
+    .replace(/\[[^\]]{1,30}\]/g, ' ')
+    .replace(/(^|\s)>>+\s*/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
 }
 
 // --- 分塊 ---
@@ -214,7 +227,8 @@ export function assembleBilingual(
 
 // 術語第一次出現時，把 glossary 的白話註解附到該句（deterministic — chunk 平行翻譯，
 // 模型不知道全片第一次出現在哪，這件事只能程式做。原則 #2：程式碼管品質地板）。
-// 只補「呈現形式含英文」的術語（純中文呈現如「推論」不需要解釋），且不覆蓋既有譯註。
+// 註格式「呈現形式：解釋」讓觀眾知道在解釋哪個詞；只補「呈現形式含英文」的術語；
+// 首句已有譯註時退而找下一句含該術語的句子，不覆蓋既有譯註。
 export function attachGlossaryNotes(cues: BilingualCue[], glossary: GlossaryEntry[]): number {
   let added = 0;
   for (const g of glossary) {
@@ -224,11 +238,11 @@ export function attachGlossaryNotes(cues: BilingualCue[], glossary: GlossaryEntr
     let target: BilingualCue | undefined;
     for (const v of variants) {
       const re = new RegExp(`\\b${v.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`, 'i');
-      target = cues.find((c) => !c.untranslated && re.test(c.en));
+      target = cues.find((c) => !c.untranslated && !c.note && re.test(c.en));
       if (target) break;
     }
-    if (target && !target.note) {
-      target.note = g.note.slice(0, 60);
+    if (target) {
+      target.note = `${g.zh}：${g.note}`.slice(0, 90);
       added++;
     }
   }
@@ -434,13 +448,15 @@ export async function runPipeline(
       retries += o.retries;
       for (const [id, en] of o.byId) fixedById.set(id, en);
     }
-    sentences = sentences.map((s) => {
-      const fixed = fixedById.get(s.id);
-      if (fixed && fixed !== s.text) {
+    // 套用修稿 + deterministic 清洗；清完是空的（純 [music]/>> 雜訊句）整句移除
+    sentences = sentences.flatMap((s) => {
+      const cleaned = cleanAsrText(fixedById.get(s.id) ?? s.text);
+      if (!cleaned) {
         asrRepaired++;
-        return { ...s, text: fixed };
+        return [];
       }
-      return s;
+      if (cleaned !== s.text) asrRepaired++;
+      return [{ ...s, text: cleaned }];
     });
   }
 

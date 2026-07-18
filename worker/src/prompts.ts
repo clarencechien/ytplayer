@@ -9,12 +9,12 @@
 import type { Sentence } from './segment';
 import type { GlossaryEntry } from './pipeline';
 
-export const PROMPT_VERSION = 'v2';
+export const PROMPT_VERSION = 'v3';
 
 // handoff §4.4 對照表。左：禁用（中國用語），右：台灣慣用。程式端掃描 + prompt 內文皆用此表。
 export const BANNED_WORDS: Array<[string, string]> = [
   ['視頻', '影片'],
-  ['質量', '品質'],
+  ['質量', '品質'], // 例外：物理的質量（mass）是台灣正確用法，見 BANNED_EXCEPTIONS
   ['信息', '資訊'],
   ['網絡', '網路'],
   ['軟件', '軟體'],
@@ -30,6 +30,11 @@ export const BANNED_WORDS: Array<[string, string]> = [
   ['優化', '最佳化'],
   ['菜單', '選單'],
 ];
+
+// 掃描白名單：這些 pattern 中的「禁用詞」其實是正確用法，掃描前先遮掉
+export const BANNED_EXCEPTIONS: Record<string, RegExp> = {
+  質量: /質量流量|質量[（(][Mm]ass/g, // mass（物理量），如「質量流量（Mass flow）」
+};
 
 export interface PromptMeta {
   title: string;
@@ -103,6 +108,8 @@ ${glossaryText}
 
 note（譯註）規則：
 - 雙關、文化梗、慣用語、需要背景知識才懂的說法 → 加 "note"，30 字內白話解釋
+- note 一律以「被解釋的詞」開頭，格式「詞：解釋」，例：「double click：意指深入探討」
+  — 觀眾要能一眼看出這條註在解釋哪個詞
 - 術語本身的解釋不用你加（系統會在術語第一次出現時自動附上），不要為術語重複寫 note
 ${extraHint ? `\n特別注意：${extraHint}\n` : ''}
 上文（僅供銜接語氣，不要翻譯）：
