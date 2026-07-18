@@ -6,6 +6,7 @@ import {
   chunkSentences,
   translateChunk,
   repairChunk,
+  sanityCheckItem,
   assembleBilingual,
   attachGlossaryNotes,
   toSrt,
@@ -25,6 +26,12 @@ describe('cleanJson', () => {
   });
   it('無法解析就丟錯', () => {
     expect(() => cleanJson('完全不是 JSON')).toThrow();
+  });
+  it('中途截斷的 JSON 救回已完整的部分', () => {
+    expect(cleanJson('[{"id":0,"zh":"甲"},{"id":1,"zh":"乙"},{"id":2,"zh":"丙')).toEqual([
+      { id: 0, zh: '甲' },
+      { id: 1, zh: '乙' },
+    ]);
   });
 });
 
@@ -66,6 +73,26 @@ describe('chunkSentences', () => {
   });
 });
 
+describe('sanityCheckItem（fail-fast，不用 LLM 自我審查）', () => {
+  const en = 'the models are really great and can figure out steps';
+  it('簡體字直接打回', () => {
+    expect(sanityCheckItem(en, '这些模型真的很棒')).toContain('簡體');
+    expect(sanityCheckItem(en, '模型可以在护栏内运作')).toContain('簡體');
+  });
+  it('沒翻（原文照抄 / 無中文）打回', () => {
+    expect(sanityCheckItem(en, en)).toBeTruthy();
+    expect(sanityCheckItem(en, 'some english output only')).toBeTruthy();
+  });
+  it('正常繁體譯文通過；短句保留英文（OK、專有名詞）不誤殺', () => {
+    expect(sanityCheckItem(en, '這些模型真的很強，能自己想出步驟。')).toBeNull();
+    expect(sanityCheckItem('OK.', 'OK。')).toBeNull();
+    expect(sanityCheckItem('Katelyn?', 'Katelyn？')).toBeNull();
+  });
+  it('譯文長度爆走打回', () => {
+    expect(sanityCheckItem('Hi there friends.', '哈'.repeat(200))).toContain('長度');
+  });
+});
+
 describe('translateChunk', () => {
   const chunk = { before: [], target: [sent(0), sent(1)], after: [] };
 
@@ -102,6 +129,49 @@ describe('translateChunk', () => {
     const r = await translateChunk(llm, meta, [], chunk);
     expect(r.retries).toBe(1);
     expect(r.byId.get(0)?.zh).toBe('這支影片很棒');
+  });
+
+  it('fail-fast：簡體輸出視同缺句 → 帶提示重試後過關', async () => {
+    let n = 0;
+    const llm = async (prompt: string) => {
+      if (n++ === 0) return '[{"id":0,"zh":"这是简体输出"},{"id":1,"zh":"一"}]';
+      expect(prompt).toContain('品質檢查');
+      return '[{"id":0,"zh":"這是繁體輸出"},{"id":1,"zh":"一"}]';
+    };
+    const r = await translateChunk(llm, meta, [], chunk);
+    expect(r.retries).toBe(1);
+    expect(r.byId.get(0)?.zh).toBe('這是繁體輸出');
+    expect(r.problems).toEqual([]);
+  });
+
+  it('崩塌偵測：同句譯文重複 3 次只留第一句，其餘視同缺句', async () => {
+    const big = { before: [], target: [sent(0), sent(1), sent(2)], after: [] };
+    const llm = async () => '[{"id":0,"zh":"重複的譯文內容"},{"id":1,"zh":"重複的譯文內容"},{"id":2,"zh":"重複的譯文內容"}]';
+    const r = await translateChunk(llm, meta, [], big);
+    expect(r.byId.size).toBe(1);
+    expect(r.problems.join(' ')).toContain('重複');
+  });
+
+  it('整包兩次失敗 → 切半分治救回（>10 句才切）', async () => {
+    const big = { before: [], target: Array.from({ length: 12 }, (_, i) => sent(i)), after: [] };
+    const llm = async (prompt: string) => {
+      const ids = [...prompt.matchAll(/^(\d+): /gm)].map((m) => Number(m[1]));
+      if (ids.length > 6) return '整包壞掉不是 JSON'; // 大包一律失敗
+      return JSON.stringify(ids.map((id) => ({ id, zh: `中${id}` })));
+    };
+    const r = await translateChunk(llm, meta, [], big);
+    expect(r.byId.size).toBe(12); // 兩半各自成功
+    expect(r.problems).toEqual([]);
+    expect(r.retries).toBeGreaterThan(0);
+  });
+
+  it('分治後仍缺 → problems 記載原因', async () => {
+    const big = { before: [], target: Array.from({ length: 12 }, (_, i) => sent(i)), after: [] };
+    const llm = async () => '永遠壞掉';
+    const r = await translateChunk(llm, meta, [], big);
+    expect(r.byId.size).toBe(0);
+    expect(r.problems.length).toBeGreaterThan(0);
+    expect(r.problems.join(' ')).toContain('缺');
   });
 
   it('多餘的 id 與空 zh 被丟棄', async () => {
