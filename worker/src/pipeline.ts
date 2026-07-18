@@ -155,7 +155,8 @@ export async function translateChunk(
   llm: LlmFn,
   meta: PromptMeta,
   glossary: GlossaryEntry[],
-  chunk: TranslateChunkInput
+  chunk: TranslateChunkInput,
+  sourceLang = 'en'
 ): Promise<ChunkOutcome> {
   const expected = new Set(chunk.target.map((s) => s.id));
   let byId = new Map<number, { zh: string; note?: string }>();
@@ -167,7 +168,7 @@ export async function translateChunk(
     if (attempt > 0) retries++;
     const hint = attempt > 0 ? `上一次輸出有問題（${lastProblem}）。務必輸出純 JSON，且涵蓋所有 id。` : undefined;
     try {
-      const parsed = parseChunkOutput(await llm(buildTranslatePrompt(meta, glossary, chunk, hint)), expected);
+      const parsed = parseChunkOutput(await llm(buildTranslatePrompt(meta, glossary, chunk, hint, sourceLang)), expected);
       // 保留較完整的一輪
       if (parsed.size > byId.size) byId = parsed;
       if (byId.size < expected.size) lastProblem = `預期 ${expected.size} 句只得到 ${byId.size} 句`;
@@ -183,7 +184,7 @@ export async function translateChunk(
     try {
       const again = parseChunkOutput(
         await llm(
-          buildTranslatePrompt(meta, glossary, chunk, `上一次譯文出現禁用的中國用語：${[...new Set(hits)].join('、')}。全部改為台灣慣用詞。`)
+          buildTranslatePrompt(meta, glossary, chunk, `上一次譯文出現禁用的中國用語：${[...new Set(hits)].join('、')}。全部改為台灣慣用詞。`, sourceLang)
         ),
         expected
       );
@@ -271,13 +272,23 @@ interface SourceDoc {
   tier: number;
   sourceLang: string;
   meta: PromptMeta & { durationSec: number };
-  track: { languageCode: string };
+  track: { languageCode: string; kind?: string | null };
   cues: Cue[];
 }
 
-// POC 範圍：Tier 2（append-01 §E），加上 Phase 2.5 的「Tier 3 + 英文 ASR」
-export const canTranslate = (src: { tier: number; track: { languageCode: string } }): boolean =>
-  src.tier === 2 || (src.tier === 3 && /^en(-|$)/i.test(src.track.languageCode));
+// 可否翻譯改成看「被 ingest 的那條軌」而不是 tier：
+// - 中文軌不用翻（拒收）
+// - 人工原文軌 → 可翻，不分語言、不分 tier（Tier 1 使用者主動 ingest 原文軌 = 明示要重做）
+// - ASR 軌 → 僅限英文（Phase 2.5 修稿路線）
+export const canTranslate = (src: { track: { languageCode: string; kind?: string | null } }): boolean => {
+  const lang = src.track.languageCode || '';
+  if (/^zh/i.test(lang)) return false;
+  if (src.track.kind !== 'asr') return true;
+  return /^en(-|$)/i.test(lang);
+};
+
+export const untranslatableReason = (src: { track: { languageCode: string; kind?: string | null } }): string =>
+  /^zh/i.test(src.track.languageCode || '') ? '中文軌不需要翻譯' : `非英文 ASR（${src.track.languageCode}）不支援`;
 
 export interface PipelineEnv {
   SUBS: R2Bucket;
@@ -328,8 +339,20 @@ export async function listVideos(
       out.push({ ...entry, translated: true });
       continue;
     }
-    if (await env.SUBS.head(`subs/${videoId}/source.json`)) {
-      out.push({ videoId, translated: false });
+    const srcObj = await env.SUBS.get(`subs/${videoId}/source.json`);
+    if (srcObj) {
+      const doc = JSON.parse(await srcObj.text()) as {
+        meta?: { title?: string };
+        track: { languageCode: string; kind?: string | null };
+      };
+      const queued = canTranslate(doc);
+      out.push({
+        videoId,
+        title: doc.meta?.title ?? videoId,
+        translated: false,
+        queued,
+        ...(queued ? {} : { reason: untranslatableReason(doc) }),
+      });
     }
   }
   out.sort((a, b) => String(b.generatedAt ?? '').localeCompare(String(a.generatedAt ?? '')));
@@ -365,7 +388,7 @@ export async function translateNextPending(
     // 範圍先讀出來判斷，不符合直接跳過（不佔鎖、不進 pipeline）
     const srcObj = await env.SUBS.get(`subs/${videoId}/source.json`);
     if (!srcObj) continue;
-    const srcDoc = JSON.parse(await srcObj.text()) as { tier: number; track: { languageCode: string } };
+    const srcDoc = JSON.parse(await srcObj.text()) as { track: { languageCode: string; kind?: string | null } };
     if (!canTranslate(srcDoc)) continue;
 
     const lock = await env.SUBS.head(`subs/${videoId}/.translating`);
@@ -395,12 +418,9 @@ export async function runPipeline(
   if (!srcObj) return { status: 404, body: { ok: false, error: 'source.json 不存在，請先用 ext ingest' } };
   const src = JSON.parse(await srcObj.text()) as SourceDoc;
   if (!canTranslate(src)) {
-    return {
-      status: 422,
-      body: { ok: false, error: `tier ${src.tier}（${src.track.languageCode}）不在範圍：只處理 Tier 2，或 Tier 3 + 英文 ASR（Phase 2.5）` },
-    };
+    return { status: 422, body: { ok: false, error: `不在範圍：${untranslatableReason(src)}` } };
   }
-  const needRepair = src.tier === 3;
+  const needRepair = src.track.kind === 'asr';
   if (!llmOverride && !env.GEMINI_API_KEY) {
     return { status: 500, body: { ok: false, error: '未設定 GEMINI_API_KEY secret' } };
   }
@@ -470,7 +490,7 @@ export async function runPipeline(
   const warnings: string[] = [];
   for (let attempt = 0; attempt < 2; attempt++) {
     try {
-      const parsed = cleanJson(await llm(buildGlossaryPrompt(src.meta, sentences)));
+      const parsed = cleanJson(await llm(buildGlossaryPrompt(src.meta, sentences, src.track.languageCode)));
       if (!Array.isArray(parsed)) throw new Error('glossary 不是陣列');
       glossary = parsed
         .map(
@@ -498,7 +518,7 @@ export async function runPipeline(
   const workers = Array.from({ length: Math.min(4, chunks.length) }, async () => {
     while (next < chunks.length) {
       const idx = next++;
-      outcomes[idx] = await translateChunk(llm, src.meta, glossary, chunks[idx]);
+      outcomes[idx] = await translateChunk(llm, src.meta, glossary, chunks[idx], src.track.languageCode);
     }
   });
   await Promise.all(workers);

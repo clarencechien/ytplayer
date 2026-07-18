@@ -111,11 +111,11 @@ describe('runPipeline（整合）', () => {
     expect(stats.warnings.some((w) => w.includes('翻譯失敗'))).toBe(true);
   });
 
-  it('Phase 2.5：Tier 3 + 英文 ASR 先修稿再翻，en 是修好的版本', async () => {
+  it('Phase 2.5：英文 ASR 軌先修稿再翻，en 是修好的版本', async () => {
     const SUBS = new FakeR2();
     const src = makeSource();
     src.tier = 3;
-    src.track = { languageCode: 'en' };
+    src.track = { languageCode: 'en', kind: 'asr' };
     await SUBS.put('subs/ksfm6jeTg3Q/source.json', JSON.stringify(src));
     const env = { SUBS: SUBS as unknown as R2Bucket, GEMINI_MODEL: 'fake-model' };
     const r = await runPipeline(env, 'ksfm6jeTg3Q', false, fakeLlm);
@@ -128,14 +128,29 @@ describe('runPipeline（整合）', () => {
     expect(bilingual.cues[0].zh).toBe('中文0。');
   });
 
-  it('tier 3 非英文被拒（Phase 2.5 僅限英文來源）', async () => {
+  it('非英文 ASR 軌被拒；中文軌被拒；日文「人工」軌可翻（Tier 1 重做路徑）', async () => {
     const SUBS = new FakeR2();
-    const src = makeSource();
-    src.tier = 3;
-    src.track = { languageCode: 'ja' };
-    await SUBS.put('subs/ksfm6jeTg3Q/source.json', JSON.stringify(src));
-    const r = await runPipeline({ SUBS: SUBS as unknown as R2Bucket }, 'ksfm6jeTg3Q', false, fakeLlm);
-    expect(r.status).toBe(422);
+    const env = { SUBS: SUBS as unknown as R2Bucket, GEMINI_MODEL: 'fake-model' };
+
+    const jaAsr = makeSource();
+    jaAsr.tier = 3;
+    jaAsr.track = { languageCode: 'ja', kind: 'asr' };
+    await SUBS.put('subs/ksfm6jeTg3Q/source.json', JSON.stringify(jaAsr));
+    expect((await runPipeline(env, 'ksfm6jeTg3Q', false, fakeLlm)).status).toBe(422);
+
+    const zhManual = makeSource();
+    zhManual.track = { languageCode: 'zh-Hant', kind: null };
+    await SUBS.put('subs/ksfm6jeTg3Q/source.json', JSON.stringify(zhManual));
+    expect((await runPipeline(env, 'ksfm6jeTg3Q', false, fakeLlm)).status).toBe(422);
+
+    const jaManual = makeSource();
+    jaManual.tier = 1; // 影片有繁中軌，但使用者主動選了日文原文軌重做
+    jaManual.track = { languageCode: 'ja', kind: null };
+    await SUBS.put('subs/ksfm6jeTg3Q/source.json', JSON.stringify(jaManual));
+    const r = await runPipeline(env, 'ksfm6jeTg3Q', false, fakeLlm);
+    expect(r.status).toBe(200);
+    const stats = (r.body as { stats: { asrRepaired: number } }).stats;
+    expect(stats.asrRepaired).toBe(0); // 人工軌不修稿
   });
 });
 
@@ -152,12 +167,12 @@ describe('translateNextPending（cron 佇列）', () => {
     expect(SUBS.store.has('subs/ksfm6jeTg3Q/.translating')).toBe(false);
   });
 
-  it('Tier 3 非英文跳過、不佔佇列，後面的 Tier 2 照翻', async () => {
+  it('非英文 ASR 跳過、不佔佇列，後面可翻的照翻', async () => {
     const SUBS = new FakeR2();
     const t3 = makeSource();
     t3.videoId = 'AAAAAAAAAAA';
     t3.tier = 3;
-    t3.track = { languageCode: 'ja' };
+    t3.track = { languageCode: 'ja', kind: 'asr' };
     await SUBS.put('subs/AAAAAAAAAAA/source.json', JSON.stringify(t3));
     await SUBS.put('subs/ksfm6jeTg3Q/source.json', JSON.stringify(makeSource()));
     const r = await translateNextPending(envOf(SUBS), fakeLlm);
@@ -165,11 +180,11 @@ describe('translateNextPending（cron 佇列）', () => {
     expect(SUBS.store.has('subs/AAAAAAAAAAA/bilingual.json')).toBe(false);
   });
 
-  it('Tier 3 英文 ASR 會進佇列（Phase 2.5）', async () => {
+  it('英文 ASR 軌會進佇列（Phase 2.5）', async () => {
     const SUBS = new FakeR2();
     const t3 = makeSource();
     t3.tier = 3;
-    t3.track = { languageCode: 'en' };
+    t3.track = { languageCode: 'en', kind: 'asr' };
     await SUBS.put('subs/ksfm6jeTg3Q/source.json', JSON.stringify(t3));
     const r = await translateNextPending(envOf(SUBS), fakeLlm);
     expect(r.translated).toBe('ksfm6jeTg3Q');

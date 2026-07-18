@@ -48,6 +48,27 @@ describe('segmentCues', () => {
     expect(segmentCues(cues).length).toBe(2);
   });
 
+  it('CJK 無標點輸入（歌詞）靠字元數上限切，不會糊成一句', () => {
+    // 模擬日文歌詞軌：每句 10 個假名、無標點、無時間 gap
+    const cues: Cue[] = Array.from({ length: 12 }, (_, i) => ({
+      start: i * 3,
+      dur: 3,
+      text: 'あなたのことを想ってる',
+    }));
+    const s = segmentCues(cues);
+    expect(s.length).toBeGreaterThan(1); // v3 以前這會糊成一整句
+    const covered = s.flatMap((x) => x.cueIds);
+    expect(covered).toEqual([...Array(cues.length).keys()]);
+  });
+
+  it('CJK 句尾標點（。！？）也算句子邊界', () => {
+    const cues: Cue[] = [
+      { start: 0, dur: 2, text: '今日はいい天気ですね。' },
+      { start: 2, dur: 2, text: '散歩に行きましょう！' },
+    ];
+    expect(segmentCues(cues).length).toBe(2);
+  });
+
   it('超過 60 詞硬切防跑飛', () => {
     const word = 'word';
     const cues: Cue[] = Array.from({ length: 10 }, (_, i) => ({

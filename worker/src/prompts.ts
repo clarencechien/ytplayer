@@ -9,7 +9,7 @@
 import type { Sentence } from './segment';
 import type { GlossaryEntry } from './pipeline';
 
-export const PROMPT_VERSION = 'v3';
+export const PROMPT_VERSION = 'v4';
 
 // handoff §4.4 對照表。左：禁用（中國用語），右：台灣慣用。程式端掃描 + prompt 內文皆用此表。
 export const BANNED_WORDS: Array<[string, string]> = [
@@ -46,9 +46,9 @@ const bannedTable = () => BANNED_WORDS.map(([bad, good]) => `${bad}→${good}`).
 
 const AUDIENCE = '目標觀眾：台灣的大學生程度、非本科領域的一般人。目標是讓他們看懂六～八成 — 未解釋的行話是最大的障礙。';
 
-export function buildGlossaryPrompt(meta: PromptMeta, sentences: Sentence[]): string {
+export function buildGlossaryPrompt(meta: PromptMeta, sentences: Sentence[], sourceLang = 'en'): string {
   return `你是專業影片字幕翻譯的術語編輯。${AUDIENCE}
-以下是一支 YouTube 影片的資訊與完整英文字幕。
+以下是一支 YouTube 影片的資訊與完整原文字幕（原文語言：${sourceLang}）。
 任務：抽出翻譯前需要統一的術語表，並替每個術語決定「呈現形式」與「白話註解」。
 
 zh（呈現形式）規則：
@@ -82,12 +82,13 @@ export function buildTranslatePrompt(
   meta: PromptMeta,
   glossary: GlossaryEntry[],
   chunk: TranslateChunkInput,
-  extraHint?: string
+  extraHint?: string,
+  sourceLang = 'en'
 ): string {
   const glossaryText = glossary.length
     ? glossary.map((g) => `- ${g.term} → ${g.zh}${g.note ? `（${g.note}）` : ''}`).join('\n')
     : '（無）';
-  return `你是資深字幕譯者，把英文影片字幕翻成道地的台灣正體中文。品質目標：明顯高於機器翻譯，讀起來像台灣人寫的字幕。
+  return `你是資深字幕譯者，把影片字幕從原文（語言：${sourceLang}）翻成道地的台灣正體中文。品質目標：明顯高於機器翻譯，讀起來像台灣人寫的字幕。
 ${AUDIENCE}
 
 影片背景（幫助理解語境，不用翻譯）：
