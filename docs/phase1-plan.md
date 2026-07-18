@@ -103,8 +103,11 @@ worker/               # Cloudflare Worker（TypeScript + wrangler）
 | capture 的 videoId ≠ 網址列 videoId（SPA 殘留） | popup 以網址列 `v` 為準過濾 captures |
 | 手動開關 CC 這步驟麻煩 | 接受。這是 POC；自動化（如自動點 CC）留 Phase 4 再議 |
 
-## 6. 待確認的決策（回覆時一併定案即可）
+## 6. 決策（已定案）
 
-1. Worker 名稱／網域：預設 `ytplayer-ingest`（`*.workers.dev` 自動網域），OK？
-2. R2 bucket 名稱：預設 `ytplayer-subs`，OK？
-3. `phase0b-*.json` 何時提供：等它到手才動 normalizer；ext/worker 骨架可先寫
+1. Worker 名稱：**`ytplayer`**；R2 bucket：`ytplayer-subs`
+2. 部署方式：**Cloudflare Workers Builds（GitHub 連結，push 即部署）**，步驟見 `worker/README.md`；
+   deploy command `npm run deploy:ci` 會 best-effort 建 bucket
+3. ext 不對 Worker 開 host_permission — 改由 Worker 回 CORS 標頭（安全性由 `INGEST_KEY` 把關），
+   權限縮到只剩 youtube.com；Phase 3 player 頁讀 GET 端點也直接受益
+4. normalizer 只支援 json3（phase0b 確認播放器固定 `fmt=json3`），fixture 進了單元測試

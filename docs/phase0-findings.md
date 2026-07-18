@@ -74,10 +74,21 @@ HTML 重抓 + balanced-brace parse 在三支上全部成功且 videoId 正確。
 - 使用者環境同時有其他也在 wrap XHR/fetch 的擴充功能（廣告攔截器、`fix-yt-traditional-chinese-subtitle` 等）
   → ext 的攔截要防禦性實作：保持原方法語意、不吞錯誤、容忍多層包裝共存
 
+**phase0b 完整報告（`phase0/out/phase0b--a0ecQMq-rM.json`）確認：**
+
+- 播放器請求確實帶 **`pot`**（+`potc=1`）與完整 client 識別（`c=WEB`、`cver`、`cbrand/cbr/cbrver`、`cplatform` 等）
+- **`fmt=json3`** 是播放器預設格式 → normalizer 只需支援 json3
+- **原樣重放可行**：同 session 內 fetch 攔到的 URL → `200`、非空、合法 json3（但 ext 設計上直接存回應 body，不依賴重放）
+- json3 結構：無 `segs` 的事件 = 視窗定義；`aAppend===1` = roll-up 捲動列（跳過）；其餘每事件一列，`segs[].utf8` 逐詞串接
+- **Gemini 版 ASR（`variant=gemini`）有標點、大小寫、`[music]` 標記**（"When you're dealing… launchpad,"）
+  → append-01 §C「英文 ASR 需補標點」的前提已部分過時，Phase 2.5 範圍可能縮小
+- **tlang 在真實使用中確實出現**：使用者當時開著「自動翻譯→中文（繁體）」，前兩筆 capture 都是 `tlang=zh-Hant`
+  → ext 的 tlang 過濾是必要防線，不是理論防禦
+- 附帶觀察：同一 URL 的自動翻譯結果**不穩定**（capture 1379 events / 重放 931 events，字詞也不同）— 再次支持紅線 D
+
 | 項目 | 狀態 | 去向 |
 |---|---|---|
-| 捕獲 body 的格式實例（json3 或 srv3 XML？含 `pot` 參數？重放是否可行？） | 待 `__p0report()` 產出的 `phase0b-*.json` | 作為 Phase 1 正規化程式的 fixture；在此之前 normalizer 按雙格式（json3 + srv3）設計 |
-| ASR vs manual 內容差異實例 | 未取得 | 在 Tier 2 影片上開關兩條軌各攔一次即可比較 |
+| ASR vs manual 內容差異實例 | 部分取得（Gemini ASR 品質觀察如上） | 完整比較：在 Tier 2 影片上開關兩條軌各攔一次 |
 
 ## 6. Phase 1 設計修正（由本次結果導出）
 

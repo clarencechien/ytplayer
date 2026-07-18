@@ -15,7 +15,7 @@
 | Phase | 內容 | 狀態 |
 |---|---|---|
 | 0 | 可行性驗證（caption track、CORS） | 🟢 決策問題已全數有答案 — 見 [docs/phase0-findings.md](docs/phase0-findings.md)。結論：ext 必要；timedtext 有 POT 防護，ingest 改走「攔截播放器請求」路徑，待 probe2 最終確認 |
-| 1 | Chrome ext（ingest，攔截式）+ Worker `/ingest` | ⬜ |
+| 1 | Chrome ext（ingest，攔截式）+ Worker `/ingest` | 🟡 程式完成、測試過（vitest 11 + wrangler dev 煙霧測試）— 待 [Cloudflare 連結部署](worker/README.md) 與 [ext 載入](ext/README.md) 後實機驗收 |
 | 2 | 翻譯 pipeline（斷句 / glossary / 分塊翻譯）— 只處理 Tier 2 | ⬜ |
 | 3 | Player 頁（iframe API + 字幕層） | ⬜ |
 | 2.5 | ASR 修稿 pipeline（僅英文來源；Phase 3 之後） | ⬜ |

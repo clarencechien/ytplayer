@@ -1,0 +1,930 @@
+{
+  "probedAt": "2026-07-18T07:47:44.349Z",
+  "url": "https://www.youtube.com/watch?v=-a0ecQMq-rM&t=529s",
+  "videoId": "-a0ecQMq-rM",
+  "captures": [
+    {
+      "at": "2026-07-18T07:42:07.823Z",
+      "via": "xhr",
+      "params": [
+        "v",
+        "ei",
+        "caps",
+        "opi",
+        "exp",
+        "xoaf",
+        "xowf",
+        "xospf",
+        "hl",
+        "ip",
+        "ipbits",
+        "expire",
+        "sparams",
+        "signature",
+        "key",
+        "kind",
+        "lang",
+        "variant",
+        "potc",
+        "pot",
+        "fmt",
+        "xorb",
+        "xobt",
+        "xovt",
+        "tlang",
+        "cbrand",
+        "cbr",
+        "cbrver",
+        "c",
+        "cver",
+        "cplayer",
+        "cmodel",
+        "cos",
+        "cosver",
+        "cplatform"
+      ],
+      "hasPot": true,
+      "fmt": "json3",
+      "lang": "en",
+      "kind": "asr",
+      "tlang": "zh-Hant",
+      "bytes": 365999,
+      "format": "json",
+      "eventCount": 1379,
+      "firstEvents": [
+        {
+          "tStartMs": 0,
+          "dDurationMs": 2038200,
+          "id": 1,
+          "wpWinPosId": 1,
+          "wsWinStyleId": 1
+        },
+        {
+          "tStartMs": 3480,
+          "dDurationMs": 3040,
+          "wWinId": 1,
+          "segs": [
+            {
+              "utf8": "当"
+            },
+            {
+              "utf8": "你",
+              "tOffsetMs": 136
+            },
+            {
+              "utf8": "处理",
+              "tOffsetMs": 272
+            },
+            {
+              "utf8": "音乐",
+              "tOffsetMs": 408
+            },
+            {
+              "utf8": "时",
+              "tOffsetMs": 544
+            },
+            {
+              "utf8": "，",
+              "tOffsetMs": 680
+            }
+          ]
+        },
+        {
+          "tStartMs": 4790,
+          "dDurationMs": 1730,
+          "wWinId": 1,
+          "aAppend": 1,
+          "segs": [
+            {
+              "utf8": "\n"
+            }
+          ]
+        },
+        {
+          "tStartMs": 4800,
+          "dDurationMs": 3800,
+          "wWinId": 1,
+          "segs": [
+            {
+              "utf8": "就"
+            },
+            {
+              "utf8": "像",
+              "tOffsetMs": 840
+            },
+            {
+              "utf8": "建造",
+              "tOffsetMs": 1680
+            }
+          ]
+        },
+        {
+          "tStartMs": 6510,
+          "dDurationMs": 2090,
+          "wWinId": 1,
+          "aAppend": 1,
+          "segs": [
+            {
+              "utf8": "\n"
+            }
+          ]
+        },
+        {
+          "tStartMs": 6520,
+          "dDurationMs": 3800,
+          "wWinId": 1,
+          "segs": [
+            {
+              "utf8": "火箭"
+            },
+            {
+              "utf8": "或",
+              "tOffsetMs": 257
+            },
+            {
+              "utf8": "建造",
+              "tOffsetMs": 514
+            },
+            {
+              "utf8": "发射台",
+              "tOffsetMs": 771
+            },
+            {
+              "utf8": "一样",
+              "tOffsetMs": 1028
+            },
+            {
+              "utf8": "复杂",
+              "tOffsetMs": 1285
+            },
+            {
+              "utf8": "，",
+              "tOffsetMs": 1542
+            },
+            {
+              "utf8": "因此",
+              "tOffsetMs": 1799
+            }
+          ]
+        },
+        {
+          "tStartMs": 8590,
+          "dDurationMs": 1730,
+          "wWinId": 1,
+          "aAppend": 1,
+          "segs": [
+            {
+              "utf8": "\n"
+            }
+          ]
+        },
+        {
+          "tStartMs": 8600,
+          "dDurationMs": 3960,
+          "wWinId": 1,
+          "segs": [
+            {
+              "utf8": "非常"
+            },
+            {
+              "utf8": "注意",
+              "tOffsetMs": 493
+            },
+            {
+              "utf8": "关键",
+              "tOffsetMs": 986
+            },
+            {
+              "utf8": "路径",
+              "tOffsetMs": 1479
+            }
+          ]
+        }
+      ],
+      "fullUrl": "https://www.youtube.com/api/timedtext?v=-a0ecQMq-rM&ei=TC5bau6FOJ2I1d8PrdaQ8A8&caps=asr&opi=112496729&exp=xpe&xoaf=5&xowf=1&xospf=1&hl=zh-TW&ip=0.0.0.0&ipbits=0&expire=1784385724&sparams=ip%2Cipbits%2Cexpire%2Cv%2Cei%2Ccaps%2Copi%2Cexp%2Cxoaf&signature=2495D3BA347A45AC4E60ADD96B2CBC32A35B28A5.7ABEAE39BC6A0E680C5F1E219D1B8B5B8BA9CDE9&key=yt8&kind=asr&lang=en&variant=gemini&potc=1&pot=MlPFH0bjExXpwsUjyT6HRDp-sGQ37FxW0RBSXNJWbMz4A-FcXoreD90-rNWhCVj8vV86zEAR3-ZB3FMPREkt3omZNWLMu_I90vpIWx4NPgSZ1pEqGw%3D%3D&fmt=json3&xorb=2&xobt=3&xovt=3&tlang=zh-Hant&cbrand=google&cbr=Chrome&cbrver=149.0.0.0&c=WEB&cver=2.20260715.04.00&cplayer=UNIPLAYER&cmodel=chromebook&cos=CrOS&cosver=14541.0.0&cplatform=DESKTOP"
+    },
+    {
+      "at": "2026-07-18T07:42:18.658Z",
+      "via": "xhr",
+      "params": [
+        "v",
+        "ei",
+        "caps",
+        "opi",
+        "exp",
+        "xoaf",
+        "xowf",
+        "xospf",
+        "hl",
+        "ip",
+        "ipbits",
+        "expire",
+        "sparams",
+        "signature",
+        "key",
+        "kind",
+        "lang",
+        "variant",
+        "potc",
+        "pot",
+        "fmt",
+        "xorb",
+        "xobt",
+        "xovt",
+        "tlang",
+        "cbrand",
+        "cbr",
+        "cbrver",
+        "c",
+        "cver",
+        "cplayer",
+        "cmodel",
+        "cos",
+        "cosver",
+        "cplatform"
+      ],
+      "hasPot": true,
+      "fmt": "json3",
+      "lang": "en",
+      "kind": "asr",
+      "tlang": "zh-Hant",
+      "bytes": 365999,
+      "format": "json",
+      "eventCount": 1379,
+      "firstEvents": [
+        {
+          "tStartMs": 0,
+          "dDurationMs": 2038200,
+          "id": 1,
+          "wpWinPosId": 1,
+          "wsWinStyleId": 1
+        },
+        {
+          "tStartMs": 3480,
+          "dDurationMs": 3040,
+          "wWinId": 1,
+          "segs": [
+            {
+              "utf8": "当"
+            },
+            {
+              "utf8": "你",
+              "tOffsetMs": 136
+            },
+            {
+              "utf8": "处理",
+              "tOffsetMs": 272
+            },
+            {
+              "utf8": "音乐",
+              "tOffsetMs": 408
+            },
+            {
+              "utf8": "时",
+              "tOffsetMs": 544
+            },
+            {
+              "utf8": "，",
+              "tOffsetMs": 680
+            }
+          ]
+        },
+        {
+          "tStartMs": 4790,
+          "dDurationMs": 1730,
+          "wWinId": 1,
+          "aAppend": 1,
+          "segs": [
+            {
+              "utf8": "\n"
+            }
+          ]
+        },
+        {
+          "tStartMs": 4800,
+          "dDurationMs": 3800,
+          "wWinId": 1,
+          "segs": [
+            {
+              "utf8": "就"
+            },
+            {
+              "utf8": "像",
+              "tOffsetMs": 840
+            },
+            {
+              "utf8": "建造",
+              "tOffsetMs": 1680
+            }
+          ]
+        },
+        {
+          "tStartMs": 6510,
+          "dDurationMs": 2090,
+          "wWinId": 1,
+          "aAppend": 1,
+          "segs": [
+            {
+              "utf8": "\n"
+            }
+          ]
+        },
+        {
+          "tStartMs": 6520,
+          "dDurationMs": 3800,
+          "wWinId": 1,
+          "segs": [
+            {
+              "utf8": "火箭"
+            },
+            {
+              "utf8": "或",
+              "tOffsetMs": 257
+            },
+            {
+              "utf8": "建造",
+              "tOffsetMs": 514
+            },
+            {
+              "utf8": "发射台",
+              "tOffsetMs": 771
+            },
+            {
+              "utf8": "一样",
+              "tOffsetMs": 1028
+            },
+            {
+              "utf8": "复杂",
+              "tOffsetMs": 1285
+            },
+            {
+              "utf8": "，",
+              "tOffsetMs": 1542
+            },
+            {
+              "utf8": "因此",
+              "tOffsetMs": 1799
+            }
+          ]
+        },
+        {
+          "tStartMs": 8590,
+          "dDurationMs": 1730,
+          "wWinId": 1,
+          "aAppend": 1,
+          "segs": [
+            {
+              "utf8": "\n"
+            }
+          ]
+        },
+        {
+          "tStartMs": 8600,
+          "dDurationMs": 3960,
+          "wWinId": 1,
+          "segs": [
+            {
+              "utf8": "非常"
+            },
+            {
+              "utf8": "注意",
+              "tOffsetMs": 493
+            },
+            {
+              "utf8": "关键",
+              "tOffsetMs": 986
+            },
+            {
+              "utf8": "路径",
+              "tOffsetMs": 1479
+            }
+          ]
+        }
+      ],
+      "fullUrl": "https://www.youtube.com/api/timedtext?v=-a0ecQMq-rM&ei=TC5bau6FOJ2I1d8PrdaQ8A8&caps=asr&opi=112496729&exp=xpe&xoaf=5&xowf=1&xospf=1&hl=zh-TW&ip=0.0.0.0&ipbits=0&expire=1784385724&sparams=ip%2Cipbits%2Cexpire%2Cv%2Cei%2Ccaps%2Copi%2Cexp%2Cxoaf&signature=2495D3BA347A45AC4E60ADD96B2CBC32A35B28A5.7ABEAE39BC6A0E680C5F1E219D1B8B5B8BA9CDE9&key=yt8&kind=asr&lang=en&variant=gemini&potc=1&pot=MlPFH0bjExXpwsUjyT6HRDp-sGQ37FxW0RBSXNJWbMz4A-FcXoreD90-rNWhCVj8vV86zEAR3-ZB3FMPREkt3omZNWLMu_I90vpIWx4NPgSZ1pEqGw%3D%3D&fmt=json3&xorb=2&xobt=3&xovt=3&tlang=zh-Hant&cbrand=google&cbr=Chrome&cbrver=149.0.0.0&c=WEB&cver=2.20260715.04.00&cplayer=UNIPLAYER&cmodel=chromebook&cos=CrOS&cosver=14541.0.0&cplatform=DESKTOP"
+    },
+    {
+      "at": "2026-07-18T07:42:26.488Z",
+      "via": "xhr",
+      "params": [
+        "v",
+        "ei",
+        "caps",
+        "opi",
+        "exp",
+        "xoaf",
+        "xowf",
+        "xospf",
+        "hl",
+        "ip",
+        "ipbits",
+        "expire",
+        "sparams",
+        "signature",
+        "key",
+        "kind",
+        "lang",
+        "variant",
+        "potc",
+        "pot",
+        "fmt",
+        "xorb",
+        "xobt",
+        "xovt",
+        "cbrand",
+        "cbr",
+        "cbrver",
+        "c",
+        "cver",
+        "cplayer",
+        "cmodel",
+        "cos",
+        "cosver",
+        "cplatform"
+      ],
+      "hasPot": true,
+      "fmt": "json3",
+      "lang": "en",
+      "kind": "asr",
+      "tlang": null,
+      "bytes": 374694,
+      "format": "json",
+      "eventCount": 1414,
+      "firstEvents": [
+        {
+          "tStartMs": 0,
+          "dDurationMs": 2038200,
+          "id": 1,
+          "wpWinPosId": 1,
+          "wsWinStyleId": 1
+        },
+        {
+          "tStartMs": 3480,
+          "dDurationMs": 3040,
+          "wWinId": 1,
+          "segs": [
+            {
+              "utf8": "When"
+            },
+            {
+              "utf8": " you're",
+              "tOffsetMs": 120
+            },
+            {
+              "utf8": " dealing",
+              "tOffsetMs": 240
+            },
+            {
+              "utf8": " [music]",
+              "tOffsetMs": 449
+            },
+            {
+              "utf8": " with",
+              "tOffsetMs": 680
+            }
+          ]
+        },
+        {
+          "tStartMs": 4790,
+          "dDurationMs": 1730,
+          "wWinId": 1,
+          "aAppend": 1,
+          "segs": [
+            {
+              "utf8": "\n"
+            }
+          ]
+        },
+        {
+          "tStartMs": 4800,
+          "dDurationMs": 3800,
+          "wWinId": 1,
+          "segs": [
+            {
+              "utf8": "something"
+            },
+            {
+              "utf8": " as",
+              "tOffsetMs": 280
+            },
+            {
+              "utf8": " complex",
+              "tOffsetMs": 440
+            },
+            {
+              "utf8": " as",
+              "tOffsetMs": 1240
+            },
+            {
+              "utf8": " building",
+              "tOffsetMs": 1440
+            },
+            {
+              "utf8": " a",
+              "tOffsetMs": 1680
+            }
+          ]
+        },
+        {
+          "tStartMs": 6510,
+          "dDurationMs": 2090,
+          "wWinId": 1,
+          "aAppend": 1,
+          "segs": [
+            {
+              "utf8": "\n"
+            }
+          ]
+        },
+        {
+          "tStartMs": 6520,
+          "dDurationMs": 3800,
+          "wWinId": 1,
+          "segs": [
+            {
+              "utf8": "rocket"
+            },
+            {
+              "utf8": " or",
+              "tOffsetMs": 440
+            },
+            {
+              "utf8": " as",
+              "tOffsetMs": 520
+            },
+            {
+              "utf8": " building",
+              "tOffsetMs": 640
+            },
+            {
+              "utf8": " a",
+              "tOffsetMs": 840
+            },
+            {
+              "utf8": " launchpad,",
+              "tOffsetMs": 880
+            },
+            {
+              "utf8": " being",
+              "tOffsetMs": 1800
+            }
+          ]
+        },
+        {
+          "tStartMs": 8590,
+          "dDurationMs": 1730,
+          "wWinId": 1,
+          "aAppend": 1,
+          "segs": [
+            {
+              "utf8": "\n"
+            }
+          ]
+        },
+        {
+          "tStartMs": 8600,
+          "dDurationMs": 3960,
+          "wWinId": 1,
+          "segs": [
+            {
+              "utf8": "extremely"
+            },
+            {
+              "utf8": " mindful",
+              "tOffsetMs": 600
+            },
+            {
+              "utf8": " of",
+              "tOffsetMs": 1000
+            },
+            {
+              "utf8": " the",
+              "tOffsetMs": 1080
+            },
+            {
+              "utf8": " critical",
+              "tOffsetMs": 1160
+            },
+            {
+              "utf8": " path",
+              "tOffsetMs": 1480
+            }
+          ]
+        }
+      ],
+      "fullUrl": "https://www.youtube.com/api/timedtext?v=-a0ecQMq-rM&ei=TC5bau6FOJ2I1d8PrdaQ8A8&caps=asr&opi=112496729&exp=xpe&xoaf=5&xowf=1&xospf=1&hl=zh-TW&ip=0.0.0.0&ipbits=0&expire=1784385724&sparams=ip%2Cipbits%2Cexpire%2Cv%2Cei%2Ccaps%2Copi%2Cexp%2Cxoaf&signature=2495D3BA347A45AC4E60ADD96B2CBC32A35B28A5.7ABEAE39BC6A0E680C5F1E219D1B8B5B8BA9CDE9&key=yt8&kind=asr&lang=en&variant=gemini&potc=1&pot=MlPFH0bjExXpwsUjyT6HRDp-sGQ37FxW0RBSXNJWbMz4A-FcXoreD90-rNWhCVj8vV86zEAR3-ZB3FMPREkt3omZNWLMu_I90vpIWx4NPgSZ1pEqGw%3D%3D&fmt=json3&xorb=2&xobt=3&xovt=3&cbrand=google&cbr=Chrome&cbrver=149.0.0.0&c=WEB&cver=2.20260715.04.00&cplayer=UNIPLAYER&cmodel=chromebook&cos=CrOS&cosver=14541.0.0&cplatform=DESKTOP"
+    }
+  ],
+  "replaySame": {
+    "status": 200,
+    "bytes": 224612,
+    "format": "json",
+    "eventCount": 931,
+    "firstEvents": [
+      {
+        "tStartMs": 0,
+        "dDurationMs": 2038200,
+        "id": 1,
+        "wpWinPosId": 1,
+        "wsWinStyleId": 1
+      },
+      {
+        "tStartMs": 3480,
+        "dDurationMs": 3040,
+        "wWinId": 1,
+        "segs": [
+          {
+            "utf8": "當"
+          },
+          {
+            "utf8": "你",
+            "tOffsetMs": 136
+          },
+          {
+            "utf8": "處理",
+            "tOffsetMs": 272
+          },
+          {
+            "utf8": "音樂",
+            "tOffsetMs": 408
+          },
+          {
+            "utf8": "時",
+            "tOffsetMs": 544
+          },
+          {
+            "utf8": "，",
+            "tOffsetMs": 680
+          }
+        ]
+      },
+      {
+        "tStartMs": 4790,
+        "dDurationMs": 1730,
+        "wWinId": 1,
+        "aAppend": 1,
+        "segs": [
+          {
+            "utf8": "\n"
+          }
+        ]
+      },
+      {
+        "tStartMs": 4800,
+        "dDurationMs": 3800,
+        "wWinId": 1,
+        "segs": [
+          {
+            "utf8": "就"
+          },
+          {
+            "utf8": "像",
+            "tOffsetMs": 840
+          },
+          {
+            "utf8": "建造",
+            "tOffsetMs": 1680
+          }
+        ]
+      },
+      {
+        "tStartMs": 6510,
+        "dDurationMs": 2090,
+        "wWinId": 1,
+        "aAppend": 1,
+        "segs": [
+          {
+            "utf8": "\n"
+          }
+        ]
+      },
+      {
+        "tStartMs": 6520,
+        "dDurationMs": 3800,
+        "wWinId": 1,
+        "segs": [
+          {
+            "utf8": "火箭"
+          },
+          {
+            "utf8": "或",
+            "tOffsetMs": 257
+          },
+          {
+            "utf8": "建造",
+            "tOffsetMs": 514
+          },
+          {
+            "utf8": "發射台",
+            "tOffsetMs": 771
+          },
+          {
+            "utf8": "一樣",
+            "tOffsetMs": 1028
+          },
+          {
+            "utf8": "複雜",
+            "tOffsetMs": 1285
+          },
+          {
+            "utf8": "，",
+            "tOffsetMs": 1542
+          },
+          {
+            "utf8": "因此",
+            "tOffsetMs": 1799
+          }
+        ]
+      },
+      {
+        "tStartMs": 8590,
+        "dDurationMs": 1730,
+        "wWinId": 1,
+        "aAppend": 1,
+        "segs": [
+          {
+            "utf8": "\n"
+          }
+        ]
+      },
+      {
+        "tStartMs": 8600,
+        "dDurationMs": 3960,
+        "wWinId": 1,
+        "segs": [
+          {
+            "utf8": "非常"
+          },
+          {
+            "utf8": "注意",
+            "tOffsetMs": 493
+          },
+          {
+            "utf8": "關鍵",
+            "tOffsetMs": 986
+          },
+          {
+            "utf8": "路徑",
+            "tOffsetMs": 1479
+          }
+        ]
+      }
+    ]
+  },
+  "replayJson3": {
+    "status": 200,
+    "bytes": 224612,
+    "format": "json",
+    "eventCount": 931,
+    "firstEvents": [
+      {
+        "tStartMs": 0,
+        "dDurationMs": 2038200,
+        "id": 1,
+        "wpWinPosId": 1,
+        "wsWinStyleId": 1
+      },
+      {
+        "tStartMs": 3480,
+        "dDurationMs": 3040,
+        "wWinId": 1,
+        "segs": [
+          {
+            "utf8": "當"
+          },
+          {
+            "utf8": "你",
+            "tOffsetMs": 136
+          },
+          {
+            "utf8": "處理",
+            "tOffsetMs": 272
+          },
+          {
+            "utf8": "音樂",
+            "tOffsetMs": 408
+          },
+          {
+            "utf8": "時",
+            "tOffsetMs": 544
+          },
+          {
+            "utf8": "，",
+            "tOffsetMs": 680
+          }
+        ]
+      },
+      {
+        "tStartMs": 4790,
+        "dDurationMs": 1730,
+        "wWinId": 1,
+        "aAppend": 1,
+        "segs": [
+          {
+            "utf8": "\n"
+          }
+        ]
+      },
+      {
+        "tStartMs": 4800,
+        "dDurationMs": 3800,
+        "wWinId": 1,
+        "segs": [
+          {
+            "utf8": "就"
+          },
+          {
+            "utf8": "像",
+            "tOffsetMs": 840
+          },
+          {
+            "utf8": "建造",
+            "tOffsetMs": 1680
+          }
+        ]
+      },
+      {
+        "tStartMs": 6510,
+        "dDurationMs": 2090,
+        "wWinId": 1,
+        "aAppend": 1,
+        "segs": [
+          {
+            "utf8": "\n"
+          }
+        ]
+      },
+      {
+        "tStartMs": 6520,
+        "dDurationMs": 3800,
+        "wWinId": 1,
+        "segs": [
+          {
+            "utf8": "火箭"
+          },
+          {
+            "utf8": "或",
+            "tOffsetMs": 257
+          },
+          {
+            "utf8": "建造",
+            "tOffsetMs": 514
+          },
+          {
+            "utf8": "發射台",
+            "tOffsetMs": 771
+          },
+          {
+            "utf8": "一樣",
+            "tOffsetMs": 1028
+          },
+          {
+            "utf8": "複雜",
+            "tOffsetMs": 1285
+          },
+          {
+            "utf8": "，",
+            "tOffsetMs": 1542
+          },
+          {
+            "utf8": "因此",
+            "tOffsetMs": 1799
+          }
+        ]
+      },
+      {
+        "tStartMs": 8590,
+        "dDurationMs": 1730,
+        "wWinId": 1,
+        "aAppend": 1,
+        "segs": [
+          {
+            "utf8": "\n"
+          }
+        ]
+      },
+      {
+        "tStartMs": 8600,
+        "dDurationMs": 3960,
+        "wWinId": 1,
+        "segs": [
+          {
+            "utf8": "非常"
+          },
+          {
+            "utf8": "注意",
+            "tOffsetMs": 493
+          },
+          {
+            "utf8": "關鍵",
+            "tOffsetMs": 986
+          },
+          {
+            "utf8": "路徑",
+            "tOffsetMs": 1479
+          }
+        ]
+      }
+    ]
+  }
+}
