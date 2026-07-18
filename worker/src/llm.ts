@@ -1,8 +1,13 @@
-// Gemini Generative Language API 呼叫。429/5xx 退避重試兩次，其餘直接丟錯。
+// Gemini Generative Language API 呼叫。
+// 可重試：429/5xx，以及「User location is not supported」400 —— CF Worker 的
+// 出口 colo 會變（台灣流量常經香港，該區不被 Gemini 支援），同一請求重打
+// 常會走到支援的出口，實測有效。其餘錯誤直接丟。
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 export type LlmFn = (prompt: string) => Promise<string>;
+
+const MAX_ATTEMPTS = 4;
 
 export async function geminiGenerate(apiKey: string, model: string, prompt: string): Promise<string> {
   const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`;
@@ -24,10 +29,13 @@ export async function geminiGenerate(apiKey: string, model: string, prompt: stri
       if (!text) throw new Error(`Gemini 回應無文字（finishReason: ${cand?.finishReason ?? '未知'}）`);
       return text;
     }
-    if (attempt < 2 && (res.status === 429 || res.status >= 500)) {
-      await sleep(1500 * (attempt + 1));
+    const body = (await res.text()).slice(0, 300);
+    const retryable =
+      res.status === 429 || res.status >= 500 || (res.status === 400 && body.includes('location is not supported'));
+    if (attempt < MAX_ATTEMPTS - 1 && retryable) {
+      await sleep(1000 * (attempt + 1));
       continue;
     }
-    throw new Error(`Gemini API ${res.status}: ${(await res.text()).slice(0, 300)}`);
+    throw new Error(`Gemini API ${res.status}: ${body}`);
   }
 }
