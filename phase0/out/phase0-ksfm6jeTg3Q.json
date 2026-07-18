@@ -1,0 +1,101 @@
+{
+  "probedAt": "2026-07-18T07:27:30.425Z",
+  "url": "https://www.youtube.com/watch?v=ksfm6jeTg3Q",
+  "urlVideoId": "ksfm6jeTg3Q",
+  "globalVar": {
+    "present": true,
+    "videoId": "255IGB63nTY",
+    "staleAfterSpaNav": true
+  },
+  "htmlParse": {
+    "works": true,
+    "videoId": "ksfm6jeTg3Q"
+  },
+  "videoId": "ksfm6jeTg3Q",
+  "meta": {
+    "title": "Building the future of agentic infrastructure",
+    "channel": "Claude",
+    "lengthSeconds": "993",
+    "descriptionPrefix": "Agents are moving from tools you prompt to infrastructure that runs your business. But what does it take to run them in production? \nJess Yann (Product Manager, Claude Managed Agents), Katelyn Lesse ("
+  },
+  "translationLanguagesCount": 156,
+  "captionTracks": [
+    {
+      "languageCode": "en",
+      "kind": null,
+      "name": "英文",
+      "vssId": ".en",
+      "isTranslatable": true,
+      "baseUrlParams": [
+        "v",
+        "ei",
+        "caps",
+        "opi",
+        "exp",
+        "xoaf",
+        "xowf",
+        "xospf",
+        "hl",
+        "ip",
+        "ipbits",
+        "expire",
+        "sparams",
+        "signature",
+        "key",
+        "lang"
+      ]
+    },
+    {
+      "languageCode": "en",
+      "kind": "asr",
+      "name": "英文 (自動產生)",
+      "vssId": "a.en",
+      "isTranslatable": true,
+      "baseUrlParams": [
+        "v",
+        "ei",
+        "caps",
+        "opi",
+        "exp",
+        "xoaf",
+        "xowf",
+        "xospf",
+        "hl",
+        "ip",
+        "ipbits",
+        "expire",
+        "sparams",
+        "signature",
+        "key",
+        "kind",
+        "lang",
+        "variant"
+      ]
+    }
+  ],
+  "trackSamples": [
+    {
+      "languageCode": "en",
+      "kind": null,
+      "status": 200,
+      "bytes": 0,
+      "corsHeaders": {
+        "accessControlAllowOrigin": null,
+        "accessControlAllowCredentials": null
+      },
+      "error": "SyntaxError: Unexpected end of JSON input"
+    },
+    {
+      "languageCode": "en",
+      "kind": "asr",
+      "status": 200,
+      "bytes": 0,
+      "corsHeaders": {
+        "accessControlAllowOrigin": null,
+        "accessControlAllowCredentials": null
+      },
+      "error": "SyntaxError: Unexpected end of JSON input"
+    }
+  ],
+  "corsTestSnippet": "fetch(\"https://www.youtube.com/api/timedtext?v=ksfm6jeTg3Q&ei=4ypbaoOZBPyS1d8PyP3jwQc&caps=asr&opi=112496729&exp=xpe&xoaf=5&xowf=1&xospf=1&hl=zh-TW&ip=0.0.0.0&ipbits=0&expire=1784384851&sparams=ip,ipbits,expire,v,ei,caps,opi,exp,xoaf&signature=38D3E10DAB563E2AFB80C64704E8D651EA3B2EB2.2C891A24F9AE7DC29FB5D4E98F0DF64C03E69A4C&key=yt8&lang=en&fmt=json3\").then(r => r.text()).then(t => console.log('CORS OK, bytes=', t.length)).catch(e => console.log('CORS BLOCKED:', String(e)))"
+}

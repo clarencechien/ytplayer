@@ -1,0 +1,928 @@
+{
+  "probedAt": "2026-07-18T07:28:04.935Z",
+  "url": "https://www.youtube.com/watch?v=5OLs1GWB4OA",
+  "urlVideoId": "5OLs1GWB4OA",
+  "globalVar": {
+    "present": true,
+    "videoId": "5OLs1GWB4OA",
+    "staleAfterSpaNav": false
+  },
+  "htmlParse": {
+    "works": true,
+    "videoId": "5OLs1GWB4OA"
+  },
+  "videoId": "5OLs1GWB4OA",
+  "meta": {
+    "title": "I Built 10 Schools Around The World",
+    "channel": "MrBeast",
+    "lengthSeconds": "964",
+    "descriptionPrefix": "We built 10 schools around the world in what might be my biggest project ever\n\nTo see how Lowe's is helping other communities across the nation, visit: https://www.lowes.com/howwehelp\n\nFind out more a"
+  },
+  "translationLanguagesCount": 156,
+  "captionTracks": [
+    {
+      "languageCode": "tr",
+      "kind": null,
+      "name": "土耳其文",
+      "vssId": ".tr",
+      "isTranslatable": true,
+      "baseUrlParams": [
+        "v",
+        "ei",
+        "caps",
+        "opi",
+        "exp",
+        "xoaf",
+        "xowf",
+        "xospf",
+        "hl",
+        "ip",
+        "ipbits",
+        "expire",
+        "sparams",
+        "signature",
+        "key",
+        "lang"
+      ]
+    },
+    {
+      "languageCode": "zh-Hant",
+      "kind": null,
+      "name": "中文（繁體）",
+      "vssId": ".zh-Hant",
+      "isTranslatable": true,
+      "baseUrlParams": [
+        "v",
+        "ei",
+        "caps",
+        "opi",
+        "exp",
+        "xoaf",
+        "xowf",
+        "xospf",
+        "hl",
+        "ip",
+        "ipbits",
+        "expire",
+        "sparams",
+        "signature",
+        "key",
+        "lang"
+      ]
+    },
+    {
+      "languageCode": "zh-Hans",
+      "kind": null,
+      "name": "中文（簡體）",
+      "vssId": ".zh-Hans",
+      "isTranslatable": true,
+      "baseUrlParams": [
+        "v",
+        "ei",
+        "caps",
+        "opi",
+        "exp",
+        "xoaf",
+        "xowf",
+        "xospf",
+        "hl",
+        "ip",
+        "ipbits",
+        "expire",
+        "sparams",
+        "signature",
+        "key",
+        "lang"
+      ]
+    },
+    {
+      "languageCode": "ja",
+      "kind": null,
+      "name": "日文",
+      "vssId": ".ja",
+      "isTranslatable": true,
+      "baseUrlParams": [
+        "v",
+        "ei",
+        "caps",
+        "opi",
+        "exp",
+        "xoaf",
+        "xowf",
+        "xospf",
+        "hl",
+        "ip",
+        "ipbits",
+        "expire",
+        "sparams",
+        "signature",
+        "key",
+        "lang"
+      ]
+    },
+    {
+      "languageCode": "id",
+      "kind": null,
+      "name": "印尼文",
+      "vssId": ".id",
+      "isTranslatable": true,
+      "baseUrlParams": [
+        "v",
+        "ei",
+        "caps",
+        "opi",
+        "exp",
+        "xoaf",
+        "xowf",
+        "xospf",
+        "hl",
+        "ip",
+        "ipbits",
+        "expire",
+        "sparams",
+        "signature",
+        "key",
+        "lang"
+      ]
+    },
+    {
+      "languageCode": "hi",
+      "kind": null,
+      "name": "印地文",
+      "vssId": ".hi",
+      "isTranslatable": true,
+      "baseUrlParams": [
+        "v",
+        "ei",
+        "caps",
+        "opi",
+        "exp",
+        "xoaf",
+        "xowf",
+        "xospf",
+        "hl",
+        "ip",
+        "ipbits",
+        "expire",
+        "sparams",
+        "signature",
+        "key",
+        "lang"
+      ]
+    },
+    {
+      "languageCode": "es",
+      "kind": null,
+      "name": "西班牙文",
+      "vssId": ".es",
+      "isTranslatable": true,
+      "baseUrlParams": [
+        "v",
+        "ei",
+        "caps",
+        "opi",
+        "exp",
+        "xoaf",
+        "xowf",
+        "xospf",
+        "hl",
+        "ip",
+        "ipbits",
+        "expire",
+        "sparams",
+        "signature",
+        "key",
+        "lang"
+      ]
+    },
+    {
+      "languageCode": "ta",
+      "kind": null,
+      "name": "坦米爾文",
+      "vssId": ".ta",
+      "isTranslatable": true,
+      "baseUrlParams": [
+        "v",
+        "ei",
+        "caps",
+        "opi",
+        "exp",
+        "xoaf",
+        "xowf",
+        "xospf",
+        "hl",
+        "ip",
+        "ipbits",
+        "expire",
+        "sparams",
+        "signature",
+        "key",
+        "lang"
+      ]
+    },
+    {
+      "languageCode": "bn",
+      "kind": null,
+      "name": "孟加拉文",
+      "vssId": ".bn",
+      "isTranslatable": true,
+      "baseUrlParams": [
+        "v",
+        "ei",
+        "caps",
+        "opi",
+        "exp",
+        "xoaf",
+        "xowf",
+        "xospf",
+        "hl",
+        "ip",
+        "ipbits",
+        "expire",
+        "sparams",
+        "signature",
+        "key",
+        "lang"
+      ]
+    },
+    {
+      "languageCode": "fr",
+      "kind": null,
+      "name": "法文",
+      "vssId": ".fr",
+      "isTranslatable": true,
+      "baseUrlParams": [
+        "v",
+        "ei",
+        "caps",
+        "opi",
+        "exp",
+        "xoaf",
+        "xowf",
+        "xospf",
+        "hl",
+        "ip",
+        "ipbits",
+        "expire",
+        "sparams",
+        "signature",
+        "key",
+        "lang"
+      ]
+    },
+    {
+      "languageCode": "pl",
+      "kind": null,
+      "name": "波蘭文",
+      "vssId": ".pl",
+      "isTranslatable": true,
+      "baseUrlParams": [
+        "v",
+        "ei",
+        "caps",
+        "opi",
+        "exp",
+        "xoaf",
+        "xowf",
+        "xospf",
+        "hl",
+        "ip",
+        "ipbits",
+        "expire",
+        "sparams",
+        "signature",
+        "key",
+        "lang"
+      ]
+    },
+    {
+      "languageCode": "ar",
+      "kind": null,
+      "name": "阿拉伯文",
+      "vssId": ".ar",
+      "isTranslatable": true,
+      "baseUrlParams": [
+        "v",
+        "ei",
+        "caps",
+        "opi",
+        "exp",
+        "xoaf",
+        "xowf",
+        "xospf",
+        "hl",
+        "ip",
+        "ipbits",
+        "expire",
+        "sparams",
+        "signature",
+        "key",
+        "lang"
+      ]
+    },
+    {
+      "languageCode": "ru",
+      "kind": null,
+      "name": "俄文",
+      "vssId": ".ru",
+      "isTranslatable": true,
+      "baseUrlParams": [
+        "v",
+        "ei",
+        "caps",
+        "opi",
+        "exp",
+        "xoaf",
+        "xowf",
+        "xospf",
+        "hl",
+        "ip",
+        "ipbits",
+        "expire",
+        "sparams",
+        "signature",
+        "key",
+        "lang"
+      ]
+    },
+    {
+      "languageCode": "en",
+      "kind": null,
+      "name": "英文",
+      "vssId": ".en",
+      "isTranslatable": true,
+      "baseUrlParams": [
+        "v",
+        "ei",
+        "caps",
+        "opi",
+        "exp",
+        "xoaf",
+        "xowf",
+        "xospf",
+        "hl",
+        "ip",
+        "ipbits",
+        "expire",
+        "sparams",
+        "signature",
+        "key",
+        "lang"
+      ]
+    },
+    {
+      "languageCode": "en",
+      "kind": "asr",
+      "name": "英文 (自動產生)",
+      "vssId": "a.en",
+      "isTranslatable": true,
+      "baseUrlParams": [
+        "v",
+        "ei",
+        "caps",
+        "opi",
+        "exp",
+        "xoaf",
+        "xowf",
+        "xospf",
+        "hl",
+        "ip",
+        "ipbits",
+        "expire",
+        "sparams",
+        "signature",
+        "key",
+        "kind",
+        "lang"
+      ]
+    },
+    {
+      "languageCode": "pa",
+      "kind": null,
+      "name": "旁遮普文",
+      "vssId": ".pa",
+      "isTranslatable": true,
+      "baseUrlParams": [
+        "v",
+        "ei",
+        "caps",
+        "opi",
+        "exp",
+        "xoaf",
+        "xowf",
+        "xospf",
+        "hl",
+        "ip",
+        "ipbits",
+        "expire",
+        "sparams",
+        "signature",
+        "key",
+        "lang"
+      ]
+    },
+    {
+      "languageCode": "th",
+      "kind": null,
+      "name": "泰文",
+      "vssId": ".th",
+      "isTranslatable": true,
+      "baseUrlParams": [
+        "v",
+        "ei",
+        "caps",
+        "opi",
+        "exp",
+        "xoaf",
+        "xowf",
+        "xospf",
+        "hl",
+        "ip",
+        "ipbits",
+        "expire",
+        "sparams",
+        "signature",
+        "key",
+        "lang"
+      ]
+    },
+    {
+      "languageCode": "te",
+      "kind": null,
+      "name": "泰盧固文",
+      "vssId": ".te",
+      "isTranslatable": true,
+      "baseUrlParams": [
+        "v",
+        "ei",
+        "caps",
+        "opi",
+        "exp",
+        "xoaf",
+        "xowf",
+        "xospf",
+        "hl",
+        "ip",
+        "ipbits",
+        "expire",
+        "sparams",
+        "signature",
+        "key",
+        "lang"
+      ]
+    },
+    {
+      "languageCode": "ml",
+      "kind": null,
+      "name": "馬來亞拉姆文",
+      "vssId": ".ml",
+      "isTranslatable": true,
+      "baseUrlParams": [
+        "v",
+        "ei",
+        "caps",
+        "opi",
+        "exp",
+        "xoaf",
+        "xowf",
+        "xospf",
+        "hl",
+        "ip",
+        "ipbits",
+        "expire",
+        "sparams",
+        "signature",
+        "key",
+        "lang"
+      ]
+    },
+    {
+      "languageCode": "mr",
+      "kind": null,
+      "name": "馬拉地文",
+      "vssId": ".mr",
+      "isTranslatable": true,
+      "baseUrlParams": [
+        "v",
+        "ei",
+        "caps",
+        "opi",
+        "exp",
+        "xoaf",
+        "xowf",
+        "xospf",
+        "hl",
+        "ip",
+        "ipbits",
+        "expire",
+        "sparams",
+        "signature",
+        "key",
+        "lang"
+      ]
+    },
+    {
+      "languageCode": "vi",
+      "kind": null,
+      "name": "越南文",
+      "vssId": ".vi",
+      "isTranslatable": true,
+      "baseUrlParams": [
+        "v",
+        "ei",
+        "caps",
+        "opi",
+        "exp",
+        "xoaf",
+        "xowf",
+        "xospf",
+        "hl",
+        "ip",
+        "ipbits",
+        "expire",
+        "sparams",
+        "signature",
+        "key",
+        "lang"
+      ]
+    },
+    {
+      "languageCode": "it",
+      "kind": null,
+      "name": "義大利文",
+      "vssId": ".it",
+      "isTranslatable": true,
+      "baseUrlParams": [
+        "v",
+        "ei",
+        "caps",
+        "opi",
+        "exp",
+        "xoaf",
+        "xowf",
+        "xospf",
+        "hl",
+        "ip",
+        "ipbits",
+        "expire",
+        "sparams",
+        "signature",
+        "key",
+        "lang"
+      ]
+    },
+    {
+      "languageCode": "pt",
+      "kind": null,
+      "name": "葡萄牙文",
+      "vssId": ".pt",
+      "isTranslatable": true,
+      "baseUrlParams": [
+        "v",
+        "ei",
+        "caps",
+        "opi",
+        "exp",
+        "xoaf",
+        "xowf",
+        "xospf",
+        "hl",
+        "ip",
+        "ipbits",
+        "expire",
+        "sparams",
+        "signature",
+        "key",
+        "lang"
+      ]
+    },
+    {
+      "languageCode": "de",
+      "kind": null,
+      "name": "德文",
+      "vssId": ".de",
+      "isTranslatable": true,
+      "baseUrlParams": [
+        "v",
+        "ei",
+        "caps",
+        "opi",
+        "exp",
+        "xoaf",
+        "xowf",
+        "xospf",
+        "hl",
+        "ip",
+        "ipbits",
+        "expire",
+        "sparams",
+        "signature",
+        "key",
+        "lang"
+      ]
+    },
+    {
+      "languageCode": "ko",
+      "kind": null,
+      "name": "韓文",
+      "vssId": ".ko",
+      "isTranslatable": true,
+      "baseUrlParams": [
+        "v",
+        "ei",
+        "caps",
+        "opi",
+        "exp",
+        "xoaf",
+        "xowf",
+        "xospf",
+        "hl",
+        "ip",
+        "ipbits",
+        "expire",
+        "sparams",
+        "signature",
+        "key",
+        "lang"
+      ]
+    }
+  ],
+  "trackSamples": [
+    {
+      "languageCode": "tr",
+      "kind": null,
+      "status": 200,
+      "bytes": 0,
+      "corsHeaders": {
+        "accessControlAllowOrigin": null,
+        "accessControlAllowCredentials": null
+      },
+      "error": "SyntaxError: Unexpected end of JSON input"
+    },
+    {
+      "languageCode": "zh-Hant",
+      "kind": null,
+      "status": 200,
+      "bytes": 0,
+      "corsHeaders": {
+        "accessControlAllowOrigin": null,
+        "accessControlAllowCredentials": null
+      },
+      "error": "SyntaxError: Unexpected end of JSON input"
+    },
+    {
+      "languageCode": "zh-Hans",
+      "kind": null,
+      "status": 200,
+      "bytes": 0,
+      "corsHeaders": {
+        "accessControlAllowOrigin": null,
+        "accessControlAllowCredentials": null
+      },
+      "error": "SyntaxError: Unexpected end of JSON input"
+    },
+    {
+      "languageCode": "ja",
+      "kind": null,
+      "status": 200,
+      "bytes": 0,
+      "corsHeaders": {
+        "accessControlAllowOrigin": null,
+        "accessControlAllowCredentials": null
+      },
+      "error": "SyntaxError: Unexpected end of JSON input"
+    },
+    {
+      "languageCode": "id",
+      "kind": null,
+      "status": 200,
+      "bytes": 0,
+      "corsHeaders": {
+        "accessControlAllowOrigin": null,
+        "accessControlAllowCredentials": null
+      },
+      "error": "SyntaxError: Unexpected end of JSON input"
+    },
+    {
+      "languageCode": "hi",
+      "kind": null,
+      "status": 200,
+      "bytes": 0,
+      "corsHeaders": {
+        "accessControlAllowOrigin": null,
+        "accessControlAllowCredentials": null
+      },
+      "error": "SyntaxError: Unexpected end of JSON input"
+    },
+    {
+      "languageCode": "es",
+      "kind": null,
+      "status": 200,
+      "bytes": 0,
+      "corsHeaders": {
+        "accessControlAllowOrigin": null,
+        "accessControlAllowCredentials": null
+      },
+      "error": "SyntaxError: Unexpected end of JSON input"
+    },
+    {
+      "languageCode": "ta",
+      "kind": null,
+      "status": 200,
+      "bytes": 0,
+      "corsHeaders": {
+        "accessControlAllowOrigin": null,
+        "accessControlAllowCredentials": null
+      },
+      "error": "SyntaxError: Unexpected end of JSON input"
+    },
+    {
+      "languageCode": "bn",
+      "kind": null,
+      "status": 200,
+      "bytes": 0,
+      "corsHeaders": {
+        "accessControlAllowOrigin": null,
+        "accessControlAllowCredentials": null
+      },
+      "error": "SyntaxError: Unexpected end of JSON input"
+    },
+    {
+      "languageCode": "fr",
+      "kind": null,
+      "status": 200,
+      "bytes": 0,
+      "corsHeaders": {
+        "accessControlAllowOrigin": null,
+        "accessControlAllowCredentials": null
+      },
+      "error": "SyntaxError: Unexpected end of JSON input"
+    },
+    {
+      "languageCode": "pl",
+      "kind": null,
+      "status": 200,
+      "bytes": 0,
+      "corsHeaders": {
+        "accessControlAllowOrigin": null,
+        "accessControlAllowCredentials": null
+      },
+      "error": "SyntaxError: Unexpected end of JSON input"
+    },
+    {
+      "languageCode": "ar",
+      "kind": null,
+      "status": 200,
+      "bytes": 0,
+      "corsHeaders": {
+        "accessControlAllowOrigin": null,
+        "accessControlAllowCredentials": null
+      },
+      "error": "SyntaxError: Unexpected end of JSON input"
+    },
+    {
+      "languageCode": "ru",
+      "kind": null,
+      "status": 200,
+      "bytes": 0,
+      "corsHeaders": {
+        "accessControlAllowOrigin": null,
+        "accessControlAllowCredentials": null
+      },
+      "error": "SyntaxError: Unexpected end of JSON input"
+    },
+    {
+      "languageCode": "en",
+      "kind": null,
+      "status": 200,
+      "bytes": 0,
+      "corsHeaders": {
+        "accessControlAllowOrigin": null,
+        "accessControlAllowCredentials": null
+      },
+      "error": "SyntaxError: Unexpected end of JSON input"
+    },
+    {
+      "languageCode": "en",
+      "kind": "asr",
+      "status": 200,
+      "bytes": 0,
+      "corsHeaders": {
+        "accessControlAllowOrigin": null,
+        "accessControlAllowCredentials": null
+      },
+      "error": "SyntaxError: Unexpected end of JSON input"
+    },
+    {
+      "languageCode": "pa",
+      "kind": null,
+      "status": 200,
+      "bytes": 0,
+      "corsHeaders": {
+        "accessControlAllowOrigin": null,
+        "accessControlAllowCredentials": null
+      },
+      "error": "SyntaxError: Unexpected end of JSON input"
+    },
+    {
+      "languageCode": "th",
+      "kind": null,
+      "status": 200,
+      "bytes": 0,
+      "corsHeaders": {
+        "accessControlAllowOrigin": null,
+        "accessControlAllowCredentials": null
+      },
+      "error": "SyntaxError: Unexpected end of JSON input"
+    },
+    {
+      "languageCode": "te",
+      "kind": null,
+      "status": 200,
+      "bytes": 0,
+      "corsHeaders": {
+        "accessControlAllowOrigin": null,
+        "accessControlAllowCredentials": null
+      },
+      "error": "SyntaxError: Unexpected end of JSON input"
+    },
+    {
+      "languageCode": "ml",
+      "kind": null,
+      "status": 200,
+      "bytes": 0,
+      "corsHeaders": {
+        "accessControlAllowOrigin": null,
+        "accessControlAllowCredentials": null
+      },
+      "error": "SyntaxError: Unexpected end of JSON input"
+    },
+    {
+      "languageCode": "mr",
+      "kind": null,
+      "status": 200,
+      "bytes": 0,
+      "corsHeaders": {
+        "accessControlAllowOrigin": null,
+        "accessControlAllowCredentials": null
+      },
+      "error": "SyntaxError: Unexpected end of JSON input"
+    },
+    {
+      "languageCode": "vi",
+      "kind": null,
+      "status": 200,
+      "bytes": 0,
+      "corsHeaders": {
+        "accessControlAllowOrigin": null,
+        "accessControlAllowCredentials": null
+      },
+      "error": "SyntaxError: Unexpected end of JSON input"
+    },
+    {
+      "languageCode": "it",
+      "kind": null,
+      "status": 200,
+      "bytes": 0,
+      "corsHeaders": {
+        "accessControlAllowOrigin": null,
+        "accessControlAllowCredentials": null
+      },
+      "error": "SyntaxError: Unexpected end of JSON input"
+    },
+    {
+      "languageCode": "pt",
+      "kind": null,
+      "status": 200,
+      "bytes": 0,
+      "corsHeaders": {
+        "accessControlAllowOrigin": null,
+        "accessControlAllowCredentials": null
+      },
+      "error": "SyntaxError: Unexpected end of JSON input"
+    },
+    {
+      "languageCode": "de",
+      "kind": null,
+      "status": 200,
+      "bytes": 0,
+      "corsHeaders": {
+        "accessControlAllowOrigin": null,
+        "accessControlAllowCredentials": null
+      },
+      "error": "SyntaxError: Unexpected end of JSON input"
+    },
+    {
+      "languageCode": "ko",
+      "kind": null,
+      "status": 200,
+      "bytes": 0,
+      "corsHeaders": {
+        "accessControlAllowOrigin": null,
+        "accessControlAllowCredentials": null
+      },
+      "error": "SyntaxError: Unexpected end of JSON input"
+    }
+  ],
+  "corsTestSnippet": "fetch(\"https://www.youtube.com/api/timedtext?v=5OLs1GWB4OA&ei=vSpbaqq1C5mFpt8P34yP4AQ&caps=asr&opi=112496729&exp=xpe&xoaf=5&xowf=1&xospf=1&hl=zh-TW&ip=0.0.0.0&ipbits=0&expire=1784384813&sparams=ip,ipbits,expire,v,ei,caps,opi,exp,xoaf&signature=8812310E5964E1479B78381BBEBF9BFB70FB543F.CE616A1E7F69D8F8AA2F2A56879B56DACC378743&key=yt8&lang=tr&fmt=json3\").then(r => r.text()).then(t => console.log('CORS OK, bytes=', t.length)).catch(e => console.log('CORS BLOCKED:', String(e)))"
+}

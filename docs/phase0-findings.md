@@ -1,71 +1,93 @@
 # Phase 0 Findings：可行性驗證
 
-> 狀態：**部分完成**。
-> 已在雲端環境完成「server 端能不能抓字幕」的實證（結論：不能，證據如下）。
-> 需要真實瀏覽器（住宅 IP）的四個項目，工具已備好（`phase0/devtools-probe.js`），等使用者執行後回填。
+> 狀態：**核心決策問題已全部有答案**（2026-07-18，三支影片實測，資料在 `phase0/out/`）。
+> 剩一項執行面驗證（probe2：攔截路徑），不影響架構結論，影響 Phase 1 的實作細節。
 
 ---
 
-## 1. 已驗證：server 端（datacenter IP）抓不到字幕 ✅
+## 0. 結論摘要（決策用）
 
-Handoff 的架構決策假設「Cloudflare IP 被 YouTube 封鎖，server 端抓不到」。
-本次在雲端 sandbox（datacenter egress IP）做了實測，**假設成立**，而且封鎖比預期更全面：
+| 問題 | 答案 | 證據 |
+|---|---|---|
+| CF Worker / server 端能抓字幕嗎？ | **不能** | §1：datacenter IP 全路徑被 bot-check 擋死 |
+| Player 頁能在瀏覽器端自己抓 CC 嗎？ | **不能** | §3：timedtext 無 CORS 標頭；且連 same-origin 都拿不到 body（POT） |
+| ext 是唯一 ingest 路徑嗎？ | **是** | 上兩列的交集 |
+| ext 可以「拿 baseUrl 直接 fetch」嗎？ | **不行**（新發現） | §3：頁內帶 cookie fetch 一律 `200` + **0 bytes** → Phase 1 改為攔截播放器自己的請求 |
+| `ytInitialPlayerResponse` global 在 SPA 導航後可信嗎？ | **不可信** | §4：實測 global 停留在上一支影片；HTML 重抓 + parse 三支全部成功 |
+| vssId 分層規則（`a.` = ASR、`.` = 人工）成立嗎？ | **成立** | §2：三支影片與 `kind` 欄位交叉驗證一致 |
 
-| 路徑 | 結果（2026-07-18 實測） |
+**對 handoff 的影響**：架構四格圖不變（ext → Worker → R2 → Player），但 Phase 1 的 ext 從「讀 baseUrl 自己 fetch」改為「**內容腳本攔截播放器發出的 timedtext 回應**」。詳見 §6。
+
+---
+
+## 1. Server 端（datacenter IP）抓不到字幕 ✅ 已驗證
+
+雲端 sandbox（datacenter egress IP）實測，「Cloudflare IP 被封」的假設成立且比預期更全面：
+
+| 路徑 | 結果（2026-07-18） |
 |---|---|
-| `GET /watch?v=...`（曾短暫成功一次） | 之後全部 `429` 或 `302 → google.com/sorry`（CAPTCHA 頁） |
-| Innertube `youtubei/v1/player`，`WEB` client | `200`，但 `playabilityStatus = LOGIN_REQUIRED`，reason = "Sign in to confirm you're not a bot"，**無 captionTracks** |
-| Innertube，`TVHTML5` client | 同上 |
-| Innertube，`MWEB` client | 同上 |
-| Innertube，`ANDROID` client | `400 FAILED_PRECONDITION`（舊版 client 已被要求 PO token / 直接拒絕） |
+| `GET /watch?v=...` | `429` 或 `302 → google.com/sorry`（CAPTCHA） |
+| Innertube `WEB` / `TVHTML5` / `MWEB` | `200` 但 `playabilityStatus = LOGIN_REQUIRED`："Sign in to confirm you're not a bot"，無 captionTracks |
+| Innertube `ANDROID` | `400 FAILED_PRECONDITION` |
 
-**結論（影響架構）**：
-- CF Worker（或任何 datacenter 端）**不可能**直接抓 caption track。ext 走使用者自己的 IP + cookie 是唯一可靠的 ingest 路徑。→ **Phase 1 的 ext 方案確定必要，不是備案。**
-- Phase 4 的「住宅 IP fetch node」如果要做，也必須跑在家用網路，不能上雲。
+→ Phase 4 的「住宅 IP fetch node」若要做，必須跑在家用網路。
 
-## 2. 環境限制備忘（開發用，與產品無關）
+## 2. 三支實測影片：正好各佔一個 Tier ✅
 
-- 這個雲端 session 的 egress proxy 會 reset Chromium（BoringSSL）的 TLS ClientHello（curl/openssl 正常），所以 **sandbox 內無法用 Playwright 開真實瀏覽器測 YouTube**。已試過關 post-quantum、ECH、HTTP/2、QUIC 均無效 — 屬 proxy 端限制。
-- 因此以下第 3 節的實測必須在使用者自己的 Chrome 上執行。
+（Tier 定義見 [handoff-append-01](handoff-append-01.md)；判別用 `vssId` 前綴 + `kind` 交叉驗證，兩者一致）
 
-## 3. 待使用者執行：瀏覽器端實測 ⏳
+| videoId | 影片 | tracks | Tier | 說明 |
+|---|---|---|---|---|
+| `5OLs1GWB4OA` | MrBeast "I Built 10 Schools…" | 25（24 條人工多語系 **含 `.zh-Hant`** + `a.en`） | **1** | 創作者已有繁中 → 不進 pipeline，提示用原生 |
+| `ksfm6jeTg3Q` | Claude "Building the future of agentic infrastructure" | `.en` + `a.en` | **2** | 官方英文 CC → POC 主路徑 |
+| `-a0ecQMq-rM` | SpaceX "Starship - Critical Path" | 僅 `a.en` | **3** | ASR only → ingest 後標記，Phase 2.5 再處理 |
 
-**執行方式**：
-1. 開一支 YouTube 影片頁 → DevTools Console → 整段貼上 `phase0/devtools-probe.js` → 會自動下載 `phase0-<videoId>.json`
-2. Console 會印出一行 CORS 測試 snippet → 到 `https://example.com` 的 Console 貼上，記下輸出（`CORS OK` 或 `CORS BLOCKED`）
-3. 至少跑三支：一支**官方英文字幕**、一支**只有 ASR**、一支**多語系**
-4. 把下載的 JSON 丟進 repo 的 `phase0/out/`，連同 CORS 結果回報
+其他觀察：
+- 三支的 `translationLanguages` 都是 **156** 種（自動翻譯目標語清單；依紅線規則 D 永不作為輸入，程式碼看到 `tlang` 即 bug）
+- SpaceX 的 ASR 軌 baseUrl 多了 **`variant=gemini`** 參數 — YouTube 的 ASR 已有 Gemini 版本；轉寫品質假設值得在 Phase 2.5 前重新抽查（可能比舊 ASR 乾淨）
+- `baseUrl` 參數集：`v, ei, caps, opi, exp, xoaf, xowf, xospf, hl, ip, ipbits, expire, sparams, signature, key, lang`（ASR 軌多 `kind`、`variant`）
+- `expire` 實測約 **7 小時**（probe 07:27 UTC，expire 14:27 UTC）；`ip=0.0.0.0` 且 `sparams` 含 ip → 簽名未綁定單一 IP
 
-### 3.1 caption track 結構實例（3 支影片）
+## 3. 重大新發現：timedtext 有 POT 防護，baseUrl 直接 fetch 已死 ⚠️
 
-_待回填（來源：`phase0/out/*.json` 的 `captionTracks` 欄位）_
+**三支影片、28 條軌，全部**：在 youtube.com 頁面內、帶 cookie 對 `baseUrl&fmt=json3` fetch →
+`HTTP 200`、`Content-Length 0`（空 body）。
 
-### 3.2 `baseUrl&fmt=json3` 回傳格式範例
+- 這與 2024 年底起 YouTube 對 timedtext 加上 **POT（proof-of-origin token）** 的公開觀察一致：實際播放器發出的字幕請求帶有 BotGuard 產生的 `pot=` 參數，缺了它伺服器回空 200
+- **CORS**：所有回應 `Access-Control-Allow-Origin: null`（無此標頭）→ 就算沒有 POT，非 youtube.com origin 的 fetch 也會被 CORS 擋。「player 頁自己抓軌、取消 ext」這條路**雙重確定不通**
+- 影響：ext 不能自己組 URL 抓字幕，要**攔截播放器自己發的請求**（其 URL 含有效 pot、回應含完整 cue）。此路徑由 `phase0/devtools-probe2-intercept.js` 驗證（見 §6）
 
-_待回填（來源：`trackSamples[].firstEvents`）_
+## 4. SPA 導航 stale 問題 ✅ 已實證
 
-### 3.3 CORS 測試結果（關鍵問題）
+`ksfm6jeTg3Q` 是站內點擊導航進入的，此時 `window.ytInitialPlayerResponse.videoDetails.videoId` 還停留在**上一支影片**（`255IGB63nTY`）；另兩支（直接載入）則一致。
+HTML 重抓 + balanced-brace parse 在三支上全部成功且 videoId 正確。
 
-_待回填。判定：_
-- _若 `CORS BLOCKED`（預期）→ ext 是唯一 ingest 路徑，維持 handoff 架構_
-- _若 `CORS OK` → player 頁可直接在瀏覽器端抓軌，ext 可省_
+→ **Phase 1 規則：track 清單與 meta 一律「重新 fetch `location.href` 再 parse」**，不信 global。global 只能當 fallback。
 
-_輔助證據：probe 也會記錄 timedtext 回應的 `Access-Control-Allow-Origin` 標頭（`trackSamples[].corsHeaders`）；若為 `null`，跨域 fetch 必被擋。_
+## 5. 未完成項目與去向
 
-### 3.4 ASR 軌 vs manual 軌內容差異
+| 項目 | 狀態 | 去向 |
+|---|---|---|
+| `json3` 回傳格式實例 | 未取得（POT 空回應） | probe2 攔截後即得；Phase 1 正規化程式碼以它為準 |
+| ASR vs manual 內容差異實例 | 未取得（同上） | probe2 在 Tier 2 影片上開關兩條軌各攔一次即可比較 |
+| 攔截路徑可行性（pot 參數存在？原樣重放可行？改 fmt=json3 重放可行？） | **待驗證** | `phase0/devtools-probe2-intercept.js`（使用步驟見檔頭） |
 
-_待回填（標點、大小寫、斷句的實例比較）_
+## 6. Phase 1 設計修正（由本次結果導出）
 
-### 3.5 附帶要驗證的陷阱：SPA 導航後的 stale global
-
-probe 會回報 `globalVar.staleAfterSpaNav`：在站內點擊切換影片後，`window.ytInitialPlayerResponse` 是否還停留在上一支影片。這決定 Phase 1 ext 要不要一律走「重新 fetch HTML 再 parse」的路徑。
+1. ext 內容腳本以 **MAIN world** 注入，wrap `window.fetch` + `XMLHttpRequest`，攔截 `/api/timedtext` 回應
+2. 使用流程改為：開影片 → **開 CC 選原文軌** → ext 攔到 cue 資料 → 點 ext icon → popup 顯示 tier / track → 送出
+3. popup 顯示 Tier 判定：Tier 1 提示用原生繁中、Tier 4 disable 送出（依 append #01）
+4. payload 增加 `tier` / `sourceLang` / `availableTracks`（依 append #01 §F）
+5. 若攔到的 URL 含 `tlang` → 使用者開到自動翻譯軌，**拒收並提示切回原文軌**（紅線規則 D 的落實點）
+6. 行數預算：攔截邏輯會讓 ext 超出原估的 250 行一些（估 ~300）；超出來源明確，可接受
 
 ---
 
-## 附錄：本次探測工具
+## 附錄：探測工具
 
 | 檔案 | 用途 |
 |---|---|
-| `phase0/devtools-probe.js` | **主要工具**。貼進 YouTube 影片頁 Console，產出完整 findings JSON |
-| `phase0/probe-server.mjs` | server 端探測（本次用它證明 datacenter IP 被封）；`NODE_USE_ENV_PROXY=1 node probe-server.mjs <videoId>` |
-| `phase0/probe.mjs` | Playwright 版（sandbox 內因 proxy TLS 限制跑不了；在本機裝了 playwright 可用） |
+| `phase0/devtools-probe.js` | 貼進影片頁 Console：track 清單、tier 原始資料、SPA stale 偵測（baseUrl fetch 部分已被 POT 廢掉，保留作為證據產生器） |
+| `phase0/devtools-probe2-intercept.js` | **下一步**。驗證攔截路徑 + 取得 json3 實例 |
+| `phase0/probe-server.mjs` | server 端探測（§1 證據來源） |
+| `phase0/probe.mjs` | Playwright 版（sandbox 內因 proxy TLS 限制不可用） |
