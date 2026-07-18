@@ -66,11 +66,18 @@ HTML 重抓 + balanced-brace parse 在三支上全部成功且 videoId 正確。
 
 ## 5. 未完成項目與去向
 
+**probe2 實測（2026-07-18，`-a0ecQMq-rM`）：攔截路徑確認可行 ✅**
+
+- 播放器發字幕請求用的是 **XHR**（不是 fetch）→ ext 兩者都要 wrap，但 XHR 是主要路徑
+- 攔到的回應**非空**：365,999 與 374,694 bytes（34 分鐘 ASR 軌，開 CC 後觸發兩次請求）
+  — 與 baseUrl 直接 fetch 的 `200 + 0 bytes` 形成對照，證實 POT 防護下「攔截」是唯一且足夠的路徑
+- 使用者環境同時有其他也在 wrap XHR/fetch 的擴充功能（廣告攔截器、`fix-yt-traditional-chinese-subtitle` 等）
+  → ext 的攔截要防禦性實作：保持原方法語意、不吞錯誤、容忍多層包裝共存
+
 | 項目 | 狀態 | 去向 |
 |---|---|---|
-| `json3` 回傳格式實例 | 未取得（POT 空回應） | probe2 攔截後即得；Phase 1 正規化程式碼以它為準 |
-| ASR vs manual 內容差異實例 | 未取得（同上） | probe2 在 Tier 2 影片上開關兩條軌各攔一次即可比較 |
-| 攔截路徑可行性（pot 參數存在？原樣重放可行？改 fmt=json3 重放可行？） | **待驗證** | `phase0/devtools-probe2-intercept.js`（使用步驟見檔頭） |
+| 捕獲 body 的格式實例（json3 或 srv3 XML？含 `pot` 參數？重放是否可行？） | 待 `__p0report()` 產出的 `phase0b-*.json` | 作為 Phase 1 正規化程式的 fixture；在此之前 normalizer 按雙格式（json3 + srv3）設計 |
+| ASR vs manual 內容差異實例 | 未取得 | 在 Tier 2 影片上開關兩條軌各攔一次即可比較 |
 
 ## 6. Phase 1 設計修正（由本次結果導出）
 
