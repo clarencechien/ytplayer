@@ -2,7 +2,7 @@
 // 設定（Worker URL / INGEST_KEY）存 chrome.storage.local — key 不進 repo。
 import { normalizeJson3 } from './normalize.js';
 
-const DEFAULT_WORKER_URL = 'https://ytplayer.sw-tech.workers.dev';
+const DEFAULT_WORKER_URL = 'https://ytplayer.ai-apps.work';
 
 const app = document.getElementById('app');
 const result = document.getElementById('result');
@@ -54,12 +54,12 @@ const TIER_MSG = {
 // 「Failed to fetch」沒有狀態碼可看，分層診斷：網路層 → 是不是本專案 Worker → CORS
 async function diagnoseWorker(workerUrl) {
   try {
-    await fetch(`${workerUrl}/`, { mode: 'no-cors' });
+    await fetch(`${workerUrl}/health`, { mode: 'no-cors' });
   } catch {
     return '診斷：Worker URL 連不上（網路/DNS 層失敗）— 檢查設定裡的網址，或是否被其他擴充功能擋掉';
   }
   try {
-    const r = await fetch(`${workerUrl}/`);
+    const r = await fetch(`${workerUrl}/health`);
     const j = await r.json();
     if (j?.service === 'ytplayer') return '診斷：Worker 本身正常，但 /ingest 失敗 — 請把這個結果回報';
     return `診斷：網址可連，但那裡不是 ytplayer Worker（回應：${JSON.stringify(j).slice(0, 80)}）`;
@@ -161,12 +161,12 @@ async function main() {
       });
       const out = await res.json();
       if (!res.ok || !out.ok) throw new Error(out.error ?? (out.errors ?? []).join('; ') ?? `HTTP ${res.status}`);
-      const srtUrl = `${cfg.workerUrl}/subs/${state.urlVideoId}/bilingual.srt`;
+      const watchUrl = `${cfg.workerUrl}/watch/${state.urlVideoId}`;
       result.innerHTML = `<span class="ok">✅ 已存入 ${esc(out.key)}（${out.cueCount} cues）</span>` +
         (out.warning ? `<div class="warn">⚠ ${esc(out.warning)}</div>` : '') +
         (tier === 2
-          ? `<div class="hint">已排入翻譯佇列（cron 每 5 分鐘自動跑，單支約 1–2 分鐘）。完成後見：<br>
-             <a href="${esc(srtUrl)}" target="_blank" style="color:#59f">${esc(srtUrl)}</a></div>`
+          ? `<div class="hint">已排入翻譯佇列（cron 每 5 分鐘自動跑，單支約 1–2 分鐘）。到 player 頁看：<br>
+             <a href="${esc(watchUrl)}" target="_blank" style="color:#59f">${esc(watchUrl)}</a>（翻好前會自動重試）</div>`
           : `<div class="hint">Tier ${tier} 只 ingest 不翻譯（等 Phase 2.5）</div>`);
     } catch (e) {
       let msg = String(e.message ?? e);

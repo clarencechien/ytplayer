@@ -9,7 +9,8 @@
 // 未設定 secret 時放行但在回應中警告（讓「連結 GitHub 即可用」成立，設了就鎖）。
 
 import { validateIngest } from './validate';
-import { runPipeline, translateNextPending } from './pipeline';
+import { runPipeline, translateNextPending, listVideos } from './pipeline';
+import { watchPage, indexPage } from './player';
 
 export interface Env {
   SUBS: R2Bucket;
@@ -43,9 +44,16 @@ export default {
     const authorized = !keyConfigured || req.headers.get('x-ingest-key') === env.INGEST_KEY;
     const warning = keyConfigured ? undefined : '尚未設定 INGEST_KEY secret，任何人都可寫入';
 
-    if (req.method === 'GET' && path === '/') {
+    const html = (body: string) =>
+      new Response(body, { headers: { 'content-type': 'text/html; charset=utf-8', ...CORS } });
+
+    if (req.method === 'GET' && path === '/health') {
       return json({ service: 'ytplayer', ok: true, ingestKeyConfigured: keyConfigured });
     }
+    if (req.method === 'GET' && path === '/') return html(indexPage());
+    if (req.method === 'GET' && path === '/videos.json') return json(await listVideos(env));
+    const w = path.match(/^\/watch\/([A-Za-z0-9_-]{11})$/);
+    if (req.method === 'GET' && w) return html(watchPage(w[1]));
 
     if (req.method === 'POST' && path === '/ingest') {
       if (!authorized) return json({ ok: false, error: 'unauthorized' }, 403);
@@ -80,7 +88,7 @@ export default {
       }
     }
 
-    const FILES = ['source.json', 'sentences.json', 'glossary.json', 'bilingual.json', 'bilingual.srt'];
+    const FILES = ['source.json', 'sentences.json', 'glossary.json', 'bilingual.json', 'bilingual.srt', 'info.json'];
     const m = path.match(/^\/subs\/([A-Za-z0-9_-]{11})\/([a-z.]+)$/);
     if (req.method === 'GET' && m && FILES.includes(m[2])) {
       const obj = await env.SUBS.get(`subs/${m[1]}/${m[2]}`);
