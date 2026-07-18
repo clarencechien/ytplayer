@@ -1,22 +1,50 @@
-# ytplayer — YouTube 中英雙語字幕 POC
+# ytplayer — YouTube 中英雙語字幕（自用）
 
-自用（dogfooding）工具：把 YouTube 影片的英文字幕翻成**道地台灣正體中文**，
-在自己的 player 頁做中英對照顯示。品質目標：高於 YouTube 內建自動翻譯、零中國用語。
-
-架構（已定案，見 [docs/handoff.md](docs/handoff.md) 與 [docs/handoff-append-01.md](docs/handoff-append-01.md) 的影片分層策略）：
+把 YouTube 影片的原文字幕翻成**道地台灣正體中文**，在自己的 player 頁做雙語對照。
+品質目標：高於 YouTube 內建自動翻譯、零中國用語、非本科觀眾（大學生程度）能看懂六～八成。
 
 ```
-[自用 Chrome ext] → [CF Worker] → [R2] → [Player 頁]
-   抓 caption track    翻譯 pipeline   存字幕   iframe + 自製字幕層
+[自用 Chrome ext] → [CF Worker (ytplayer)] → [R2] → [Player 頁]
+  攔截 caption 軌      cron 佇列 + 翻譯 pipeline   存字幕   iframe + 雙語字幕層
 ```
 
-## 進度
+線上：`https://ytplayer.ai-apps.work`（清單頁 `/`、播放 `/watch/{videoId}`）
 
-| Phase | 內容 | 狀態 |
-|---|---|---|
-| 0 | 可行性驗證（caption track、CORS） | 🟢 決策問題已全數有答案 — 見 [docs/phase0-findings.md](docs/phase0-findings.md)。結論：ext 必要；timedtext 有 POT 防護，ingest 改走「攔截播放器請求」路徑，待 probe2 最終確認 |
-| 1 | Chrome ext（ingest，攔截式）+ Worker `/ingest` | 🟢 實機 ingest 成功（SpaceX 707 cues）；驗收剩：三支影片 + cue 抽查 + SPA 切換 |
-| 2 | 翻譯 pipeline（斷句 / glossary / 分塊翻譯） | 🟢 首支實跑通過（181 句、零禁用詞、80 分）；**prompt v2**：目標觀眾改為大學生/非本科（術語「中文（English）」+ 白話註解自動附在第一次出現處） |
-| 3 | Player 頁（iframe API + 字幕層） | 🟡 完成待驗收：`/watch/{videoId}` + 清單頁 `/`，樣式借鏡 kvsplayer、中英同級；驗收 = 完整看完一支 20 分鐘影片 |
-| 2.5 | ASR 修稿 pipeline（僅英文來源） | 🟡 已實作：Tier 3 + en 自動先修稿（去 [music]、修聽寫錯、補標點）再進翻譯，cron 會撿 — 待 SpaceX 實跑驗收 |
-| 4 | 品質迭代（選作）+ tier 分佈統計 | ⬜ |
+## 影片分層（Tier）與解法歸屬
+
+Caption track 有四個層級，每層是不同的題目（詳見 [docs/handoff-append-01.md](docs/handoff-append-01.md)）：
+
+| Tier | 定義 | 判別 | 解法 | 歸屬 |
+|---|---|---|---|---|
+| **1** | 創作者自製多語言（有人工 zh-TW/zh-Hant 軌） | 存在非 ASR 的 zh 軌 | 預設用 YouTube 原生；**不滿意時 ingest 原文軌即重做** | ytplayer |
+| **2** | 創作者自製原文 CC | 非 ASR、僅原文 | 斷句 → glossary → 分塊翻譯（主路徑） | ytplayer |
+| **3**（英文） | 僅自動字幕 ASR | `kind==='asr'` / `vssId` 前綴 `a.` | 先 LLM 修稿再進 Tier 2 流程（Phase 2.5） | ytplayer |
+| **3**（非英文） | 僅 ASR，日/韓等 | 同上 | 轉寫不可信，唯一划算的是 **LLM 看片路線** | **kvsplayer** |
+| **4** | 無任何 CC | captionTracks 空 | 直接報錯 | —（或看片路線） |
+
+實作上可譯性判準**看「被 ingest 的軌」不看 tier**：中文軌拒收、人工原文軌不分語言可翻、ASR 僅限英文。
+紅線：YouTube 自動翻譯軌（`tlang`）永不作為輸入。
+
+## 使用流程（日常）
+
+1. YouTube 開影片 → 播放器開 CC 選**原文**軌 → 點 ext 圖示 → 送出
+2. 完事。cron 每 5 分鐘自動翻（單支 1–2 分鐘），popup 給的 `/watch` 連結過幾分鐘自己出現字幕
+3. 重翻：再 ingest 一次（source 變新即自動重翻）；改 prompt 後重跑：`POST /translate/{id}?force=1`
+
+## 現況
+
+MVP 完整可用：ingest → （英文 ASR 修稿）→ glossary → 分塊翻譯 → deterministic 驗證/fail-fast → 自動譯註 → player。
+prompt 目前 **v4**；worker 測試 59 個。品質防線與所有實證教訓見 **[docs/lessons-learned.md](docs/lessons-learned.md)**（kvsplayer 合流的接軌指南也在裡面）。
+
+## Repo 結構與文件
+
+| 路徑 | 內容 |
+|---|---|
+| `ext/` | MV3 擴充功能（攔截式 ingest），安裝見 [ext/README.md](ext/README.md) |
+| `worker/` | CF Worker：`/ingest`、`/translate`、cron 佇列、player 頁。部署見 [worker/README.md](worker/README.md) |
+| `phase0/` | 可行性探測工具與原始資料 |
+| [docs/handoff.md](docs/handoff.md) | 原始任務書（分階段規格） |
+| [docs/handoff-append-01.md](docs/handoff-append-01.md) | 影片分層策略增補 |
+| [docs/phase0-findings.md](docs/phase0-findings.md) | Phase 0 實測結論（POT、CORS、SPA stale…） |
+| [docs/phase1-plan.md](docs/phase1-plan.md) / [docs/phase2-plan.md](docs/phase2-plan.md) | 各階段實作計畫 |
+| [docs/lessons-learned.md](docs/lessons-learned.md) | **實證教訓總整理 + kvsplayer 合流接軌指南** |
