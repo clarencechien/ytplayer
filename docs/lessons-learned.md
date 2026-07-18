@@ -35,6 +35,9 @@
 - 認證模型：**讀公開、寫入要 key**（字幕非敏感）— player 頁因此不用帶 key，瀏覽器可直接看輸出
 - 非同步策略：**cron（*/5）掃 R2 佇列**勝過 long-request（kvsplayer 的教訓）與 ext fire-and-forget（popup 一關 fetch 就死、Worker 被取消）。
   規則：bilingual 缺少或比 source 舊 → 翻；`.translating` 鎖檔防重疊（10 分鐘 stale）；重新 ingest 即自動重翻；改 promptVersion 需手動 `force=1`（避免版本一 bump 全庫自動重燒）
+- **Gemini API「User location is not supported」400 是間歇性的**：Worker 出口 colo 會變（台灣流量常經香港，該區不被支援），
+  同一請求重打常換到支援的出口 → 把這種 400 列為可重試（上限 4 次）。實測分治救援也因此能撈回整包失敗的 chunk。
+  若未來變頻繁，治本選項是 Vertex AI（可指定 region）或固定出口的代理
 
 ## 4. 斷句（品質的分水嶺，也是最多迭代的地方）
 
