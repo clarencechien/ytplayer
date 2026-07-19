@@ -76,8 +76,20 @@
 
 - 樣式基底來自 kvsplayer（深色、字幕疊影片、右側逐句稿點擊跳轉）— 已驗證的版型直接繼承
 - 差異：**中英同級**（同字級同權重，僅顏色區分）— 雙語「對照學習」的定位 vs kvsplayer 的「輔助原文」定位
-- 譯註 `pre-line` 多行顯示；設定存 localStorage（顯示模式/譯註開關/跟隨捲動/字級）
+- 譯註 `pre-line` 多行顯示；設定存 localStorage（顯示模式/譯註開關/跟隨捲動/字級/透明度/速度）
 - 翻譯還沒好時自動每 20 秒重試 — 配合 cron 佇列，使用者體感是「點完 ext 過幾分鐘自己出現」
+
+### 疊在跨域 iframe 上的互動層（實戰教訓）
+
+- **焦點模型是熱鍵的生死線**：熱鍵掛在自己頁面，點了 iframe 焦點就丟。解法＝透明點擊層接管播放控制
+  （單擊播放/暫停、雙擊全螢幕，走 IFrame API），焦點永遠留在本頁 → 全螢幕下熱鍵照常
+- **點擊層必留逃生口**：原生 UI 的功能列舉不完（畫質齒輪…），精準挖洞（「留 90px」）會失敗 —
+  控制列要 hover 才浮現，而點擊層把 mousemove 吃掉了。正解是「YT 介面：鎖定/開放」一鍵讓開整層
+- **原生 CC 要用 API 關，而且時序要對**：ingest 時開的 CC 是帳號黏性設定，embed 會繼承成雙層字幕。
+  captions 模組是播放後懶載入 — onReady 時 unload 是對空氣揮拳，要掛 **onApiChange**（模組載入時點）
+  用 `setOption('captions','track',{})` + `unloadModule` 雙保險
+- 熱鍵盡量沿用 YouTube 慣例（Space/K、←→、F、M、C、Shift+</>），學習成本零；
+  `setPlaybackQuality` API 已廢棄 — 畫質交給原生齒輪（經逃生口），別做假按鈕
 
 ## 7. 影片分層（Tier）與 kvsplayer 合流接軌
 
