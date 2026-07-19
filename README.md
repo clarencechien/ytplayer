@@ -61,3 +61,12 @@ kvsplayer 合併與否的分析（架構差異 / ADR / go–no-go）見 **[docs/
 | [docs/phase0-findings.md](docs/phase0-findings.md) | Phase 0 實測結論（POT、CORS、SPA stale…） |
 | [docs/phase1-plan.md](docs/phase1-plan.md) / [docs/phase2-plan.md](docs/phase2-plan.md) | 各階段實作計畫 |
 | [docs/lessons-learned.md](docs/lessons-learned.md) | **實證教訓總整理 + kvsplayer 合流接軌指南** |
+
+## 參考資源（zh-TW 品質層的外部來源）
+
+| 資源 | 授權 | 我們怎麼用 |
+|---|---|---|
+| [OpenCC](https://github.com/BYVoid/OpenCC) TWPhrases 詞表 | Apache-2.0 | **報告層**：680 條中國用語掃描（命中只進 `hints` 提示，不觸發重譯 — 批量詞表允許誤報換覆蓋）。再生：`node worker/scripts/build-twlexicon.mjs` |
+| [speak-human-tw](https://github.com/Raymondhou0917/speak-human-tw)（說人話） | MIT | **執法層**：策展 16 條無歧義對照併入禁用詞掃描（命中觸發重譯）；其「按語境判斷／誤殺防護」哲學對應我們的 `BANNED_EXCEPTIONS` 與生成器 SKIP 表 |
+
+三層設計：prompt 對照表（16 條，每 chunk 付 token 故維持精簡）→ 執法層（32 條，低誤報，重譯）→ 報告層（680 條，僅提示）。

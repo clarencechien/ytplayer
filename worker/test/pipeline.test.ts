@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest';
 import {
   cleanJson,
   scanBanned,
+  scanExtended,
   cleanAsrText,
   chunkSentences,
   translateChunk,
@@ -40,10 +41,27 @@ describe('scanBanned', () => {
     expect(scanBanned('這個視頻的質量很好')).toEqual(['視頻', '質量']);
     expect(scanBanned('這支影片的品質很好，軟體與硬體都讚')).toEqual([]);
   });
+  it('speak-human-tw 策展追加詞也在執法層', () => {
+    expect(scanBanned('服務器不兼容，用鼠標卸載')).toEqual(['服務器', '鼠標', '兼容', '卸載']);
+    expect(scanBanned('伺服器不相容，用滑鼠移除')).toEqual([]);
+  });
   it('物理的質量（mass）是正確用法，不誤傷', () => {
     expect(scanBanned('龐大的質量流量（Mass flow）與能量')).toEqual([]);
     expect(scanBanned('火箭的質量（Mass）非常大')).toEqual([]);
     expect(scanBanned('質量流量很大，但翻譯質量很差')).toEqual(['質量']);
+  });
+});
+
+describe('scanExtended（OpenCC 報告層）', () => {
+  it('詞表載入正常且能命中（僅提示用）', async () => {
+    const { EXTENDED } = await import('../src/twlexicon');
+    expect(EXTENDED.length).toBeGreaterThan(500);
+    const [bad, good] = EXTENDED.find(([b]) => b === '網吧')!;
+    expect(scanExtended(`他在${bad}打電動`)).toEqual([`${bad}→${good}`]);
+    expect(scanExtended('他在網咖打電動')).toEqual([]);
+  });
+  it('執法層與報告層不重疊（視頻只歸執法層）', () => {
+    expect(scanExtended('這個視頻的質量')).toEqual([]);
   });
 });
 
