@@ -42,7 +42,10 @@ const STYLE = `
     position: absolute; left: 0; right: 0; bottom: 7%;
     display: flex; flex-direction: column; align-items: center; gap: 4px;
     padding: 0 4%; pointer-events: none; z-index: 6; text-align: center;
+    opacity: var(--band-alpha, 1); transition: opacity .15s;
   }
+  body.peek #subBand { opacity: .06; } /* 按住 H：暫看畫面 */
+  body[data-mode="off"] #subBand { display: none; }
   #subEn, #subZh, #subNote {
     width: fit-content; max-width: 92%;
     background: rgba(8,10,14,.72); border-radius: .4em; padding: .1em .55em;
@@ -102,11 +105,12 @@ export function watchPage(videoId: string): string {
   <h1 id="title">載入中…</h1>
   <span class="meta" id="meta"></span>
   <div class="controls">
-    <button id="btnMode">字幕：雙語</button>
+    <button id="btnMode" title="快捷鍵 C：開/關字幕">字幕：雙語</button>
     <button id="btnNotes" class="on">譯註：開</button>
     <button id="btnFollow" class="on">跟隨捲動</button>
     <button id="btnSmaller">A−</button>
     <button id="btnBigger">A＋</button>
+    <button id="btnAlpha" title="字幕底色/文字整體透明度">透明度：100%</button>
     <button id="btnFull">⛶ 全螢幕</button>
   </div>
 </header>
@@ -118,14 +122,16 @@ export function watchPage(videoId: string): string {
     </div>
   </div>
   <aside>
-    <div class="head">逐句稿（點擊跳轉）</div>
+    <div class="head">逐句稿（點擊跳轉）・快捷鍵：C 開關字幕、按住 H 暫看畫面</div>
     <div id="list"></div>
   </aside>
 </main>
 <script>
 var VID = ${JSON.stringify(videoId)};
-var MODES = [["both","字幕：雙語"],["zh","字幕：只中"],["en","字幕：只英"]];
-var S = { mode: 0, notes: true, follow: true, scale: 1 };
+var MODES = [["both","字幕：雙語"],["zh","字幕：只中"],["en","字幕：只原文"],["off","字幕：無"]];
+var OFF = 3, ALPHAS = [1, 0.75, 0.5, 0.25];
+var S = { mode: 0, notes: true, follow: true, scale: 1, alpha: 0 };
+var prevMode = 0; // C 鍵切回「無」之前的模式
 try { Object.assign(S, JSON.parse(localStorage.getItem("ytplayer-settings") || "{}")); } catch (e) {}
 var cues = [], rows = [], cur = -1;
 var yt = null, ytReady = false, pendingInit = false;
@@ -141,8 +147,11 @@ function applySettings() {
   document.getElementById("btnNotes").classList.toggle("on", S.notes);
   document.getElementById("btnFollow").classList.toggle("on", S.follow);
   document.documentElement.style.setProperty("--scale", S.scale);
+  document.documentElement.style.setProperty("--band-alpha", ALPHAS[S.alpha] || 1);
+  document.getElementById("btnAlpha").textContent = "透明度：" + Math.round((ALPHAS[S.alpha] || 1) * 100) + "%";
 }
-document.getElementById("btnMode").onclick = function () { S.mode = (S.mode + 1) % 3; save(); applySettings(); };
+document.getElementById("btnMode").onclick = function () { S.mode = (S.mode + 1) % MODES.length; save(); applySettings(); };
+document.getElementById("btnAlpha").onclick = function () { S.alpha = (S.alpha + 1) % ALPHAS.length; save(); applySettings(); };
 document.getElementById("btnNotes").onclick = function () { S.notes = !S.notes; save(); applySettings(); };
 document.getElementById("btnFollow").onclick = function () { S.follow = !S.follow; save(); applySettings(); };
 document.getElementById("btnSmaller").onclick = function () { S.scale = Math.max(0.7, +(S.scale - 0.1).toFixed(2)); save(); applySettings(); };
@@ -151,6 +160,25 @@ document.getElementById("btnFull").onclick = function () {
   var st = document.getElementById("stage");
   if (document.fullscreenElement) document.exitFullscreen(); else st.requestFullscreen();
 };
+
+// 快捷鍵（只在本頁面生效；iframe 有焦點時鍵盤事件進不來，不會跟 YouTube 熱鍵打架）
+// C：開/關字幕（記住上一個模式）；按住 H：字幕幾乎全透明暫看畫面，放開恢復
+document.addEventListener("keydown", function (e) {
+  if (e.ctrlKey || e.metaKey || e.altKey) return;
+  var k = e.key.toLowerCase();
+  if (k === "c") {
+    if (S.mode === OFF) { S.mode = prevMode; }
+    else { prevMode = S.mode; S.mode = OFF; }
+    save(); applySettings();
+  } else if (k === "h" && !e.repeat) {
+    document.body.classList.add("peek");
+  }
+});
+document.addEventListener("keyup", function (e) {
+  if (e.key.toLowerCase() === "h") document.body.classList.remove("peek");
+});
+window.addEventListener("blur", function () { document.body.classList.remove("peek"); });
+
 applySettings();
 
 var tag = document.createElement("script");
