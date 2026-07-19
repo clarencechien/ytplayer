@@ -174,6 +174,16 @@ function toggleFull() {
 }
 document.getElementById("btnFull").onclick = toggleFull;
 
+// 我們的字幕層就是 CC — 原生 CC 一律關（ingest 時開的 CC 是帳號黏性設定，embed 會繼承）。
+// setOption('captions','track',{}) 是官方 API 清空字幕軌；unloadModule 當雙保險
+function killNativeCC() {
+  if (!yt) return;
+  try { yt.setOption && yt.setOption("captions", "track", {}); } catch (e) { /* noop */ }
+  try { yt.setOption && yt.setOption("cc", "track", {}); } catch (e) { /* noop */ }
+  try { yt.unloadModule && yt.unloadModule("captions"); } catch (e) { /* noop */ }
+  try { yt.unloadModule && yt.unloadModule("cc"); } catch (e) { /* noop */ }
+}
+
 function togglePlay() {
   if (!yt || !yt.getPlayerState) return;
   if (yt.getPlayerState() === 1) yt.pauseVideo(); else yt.playVideo();
@@ -244,9 +254,12 @@ function createYT() {
     events: {
       onReady: function () {
         if (yt.setPlaybackRate) yt.setPlaybackRate(SPEEDS[S.speed] || 1);
-        // 我們的字幕層就是 CC — 原生 CC 一律關（否則 ingest 時開的 CC 是帳號黏性設定，embed 會跟著開，兩層疊在一起）
-        try { yt.unloadModule("captions"); yt.unloadModule("cc"); } catch (e) { /* 模組不存在就算了 */ }
+        killNativeCC();
       },
+      // captions 模組是播放後才懶載入的 — onReady 時 unload 是對空氣揮拳。
+      // onApiChange 正是模組載入的時點（官方事件），在這裡關才關得掉
+      onApiChange: killNativeCC,
+      onStateChange: killNativeCC,
     },
   });
 }
