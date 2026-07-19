@@ -4,6 +4,7 @@
 import type { Cue } from './validate';
 import { segmentCues, type Sentence } from './segment';
 import type { LlmFn } from './llm';
+import { CORE_EXTRA, EXTENDED } from './twlexicon';
 import {
   PROMPT_VERSION,
   BANNED_WORDS,
@@ -40,6 +41,7 @@ export interface PipelineStats {
   retries: number;
   untranslated: number;
   warnings: string[];
+  hints: string[];
   elapsedMs: number;
 }
 
@@ -63,11 +65,25 @@ export function cleanJson(text: string): unknown {
   throw new Error(`LLM 輸出無法解析為 JSON（開頭：${text.slice(0, 80).replace(/\s+/g, ' ')}…）`);
 }
 
+// 執法層（prompt 16 條 + speak-human-tw 策展追加）：命中觸發重譯
+const CORE_BANNED: Array<[string, string]> = [...BANNED_WORDS, ...CORE_EXTRA];
+
 export function scanBanned(zh: string): string[] {
-  return BANNED_WORDS.filter(([bad]) => {
+  return CORE_BANNED.filter(([bad]) => {
     const cleaned = BANNED_EXCEPTIONS[bad] ? zh.replace(BANNED_EXCEPTIONS[bad], '') : zh;
     return cleaned.includes(bad);
   }).map(([bad]) => bad);
+}
+
+// 報告層（OpenCC TWPhrases 680 條）：命中只提示（hints），不觸發重譯、不影響驗收
+// — 批量詞表允許少量誤報換覆蓋率，所以只能是建議不能是執法
+export function scanExtended(zh: string): string[] {
+  const hits: string[] = [];
+  for (const [bad, good] of EXTENDED) {
+    const cleaned = BANNED_EXCEPTIONS[bad] ? zh.replace(BANNED_EXCEPTIONS[bad], '') : zh;
+    if (cleaned.includes(bad)) hits.push(`${bad}→${good}`);
+  }
+  return hits;
 }
 
 // ASR 雜訊的 deterministic 清除（不能靠 LLM 保證）：[music]/[applause] 標記、「>>」換人說話記號
@@ -290,16 +306,20 @@ export function assembleBilingual(
   sentences: Sentence[],
   cues: Cue[],
   byId: Map<number, { zh: string; note?: string }>
-): { cues: BilingualCue[]; untranslated: number; bannedHits: string[] } {
+): { cues: BilingualCue[]; untranslated: number; bannedHits: string[]; extendedHits: string[] } {
   const out: BilingualCue[] = [];
   let untranslated = 0;
   const bannedHits: string[] = [];
+  const extendedHits: string[] = [];
   for (const s of sentences) {
     const first = cues[s.cueIds[0]];
     const last = cues[s.cueIds[s.cueIds.length - 1]];
     const tr = byId.get(s.id);
     if (!tr) untranslated++;
-    else bannedHits.push(...scanBanned(tr.zh));
+    else {
+      bannedHits.push(...scanBanned(tr.zh));
+      extendedHits.push(...scanExtended(tr.zh));
+    }
     out.push({
       start: Math.round(first.start * 1000) / 1000,
       end: Math.round((last.start + last.dur) * 1000) / 1000,
@@ -309,7 +329,7 @@ export function assembleBilingual(
       ...(tr ? {} : { untranslated: true }),
     });
   }
-  return { cues: out, untranslated, bannedHits: [...new Set(bannedHits)] };
+  return { cues: out, untranslated, bannedHits: [...new Set(bannedHits)], extendedHits: [...new Set(extendedHits)] };
 }
 
 // 術語第一次出現時，把 glossary 的白話註解附到該句（deterministic — chunk 平行翻譯，
@@ -622,9 +642,11 @@ export async function runPipeline(
   }
 
   // Step D — 組裝與驗證
-  const { cues, untranslated, bannedHits } = assembleBilingual(sentences, src.cues, byId);
+  const { cues, untranslated, bannedHits, extendedHits } = assembleBilingual(sentences, src.cues, byId);
   if (untranslated > 0) warnings.push(`${untranslated} 句翻譯失敗，以英文原文代替（標 untranslated）`);
   if (bannedHits.length > 0) warnings.push(`禁用詞殘留：${bannedHits.join('、')}`);
+  // hints 與 warnings 分開：報告層允許誤報，不能污染「warnings 必須為空」的驗收標準
+  const hints = extendedHits.length > 0 ? [`疑似中國用語（OpenCC 參考，僅提示）：${extendedHits.slice(0, 20).join('、')}`] : [];
   const autoNotes = attachGlossaryNotes(cues, glossary);
 
   const bilingual = {
@@ -637,6 +659,7 @@ export async function runPipeline(
     promptVersion: PROMPT_VERSION,
     generatedAt: new Date().toISOString(),
     warnings,
+    hints,
     cues,
   };
   await env.SUBS.put(`subs/${videoId}/bilingual.json`, JSON.stringify(bilingual), {
@@ -669,6 +692,7 @@ export async function runPipeline(
     retries,
     untranslated,
     warnings,
+    hints,
     elapsedMs: Date.now() - t0,
   };
   return { status: 200, body: { ok: true, stats } };
