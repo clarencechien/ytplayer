@@ -46,6 +46,10 @@ const STYLE = `
   }
   body.peek #subBand { opacity: .06; } /* 按住 H：暫看畫面 */
   body[data-mode="off"] #subBand { display: none; }
+
+  /* 透明點擊層：點影片=播放/暫停由我們接手，焦點不會掉進 iframe、熱鍵永遠有效。
+     底部留 90px 給 YouTube 原生控制列（進度條/音量仍可直接操作） */
+  #clickLayer { position: absolute; inset: 0 0 90px 0; z-index: 4; cursor: pointer; }
   #subEn, #subZh, #subNote {
     width: fit-content; max-width: 92%;
     background: rgba(8,10,14,.72); border-radius: .4em; padding: .1em .55em;
@@ -118,11 +122,12 @@ export function watchPage(videoId: string): string {
   <div class="stage" id="stage">
     <div class="video-wrap">
       <div id="player"></div>
+      <div id="clickLayer" title="點擊：播放/暫停・雙擊：全螢幕"></div>
       <div id="subBand"><div id="subEn"></div><div id="subZh"></div><div id="subNote"></div></div>
     </div>
   </div>
   <aside>
-    <div class="head">逐句稿（點擊跳轉）・快捷鍵：C 開關字幕、按住 H 暫看畫面</div>
+    <div class="head">逐句稿（點擊跳轉）・C 字幕開關・按住 H 暫看畫面・Space 播放・←→ ±5s・F 全螢幕</div>
     <div id="list"></div>
   </aside>
 </main>
@@ -156,13 +161,26 @@ document.getElementById("btnNotes").onclick = function () { S.notes = !S.notes; 
 document.getElementById("btnFollow").onclick = function () { S.follow = !S.follow; save(); applySettings(); };
 document.getElementById("btnSmaller").onclick = function () { S.scale = Math.max(0.7, +(S.scale - 0.1).toFixed(2)); save(); applySettings(); };
 document.getElementById("btnBigger").onclick = function () { S.scale = Math.min(1.8, +(S.scale + 0.1).toFixed(2)); save(); applySettings(); };
-document.getElementById("btnFull").onclick = function () {
+function toggleFull() {
   var st = document.getElementById("stage");
   if (document.fullscreenElement) document.exitFullscreen(); else st.requestFullscreen();
-};
+}
+document.getElementById("btnFull").onclick = toggleFull;
 
-// 快捷鍵（只在本頁面生效；iframe 有焦點時鍵盤事件進不來，不會跟 YouTube 熱鍵打架）
-// C：開/關字幕（記住上一個模式）；按住 H：字幕幾乎全透明暫看畫面，放開恢復
+function togglePlay() {
+  if (!yt || !yt.getPlayerState) return;
+  if (yt.getPlayerState() === 1) yt.pauseVideo(); else yt.playVideo();
+}
+function seekBy(sec) {
+  if (yt && yt.getCurrentTime) yt.seekTo(Math.max(0, yt.getCurrentTime() + sec), true);
+}
+// 點擊層：播放控制由我們接手，焦點不進 iframe → 熱鍵（含全螢幕時）永遠有效
+var clickLayer = document.getElementById("clickLayer");
+clickLayer.onclick = togglePlay;
+clickLayer.ondblclick = toggleFull;
+
+// 快捷鍵：C 開關字幕、按住 H 暫看畫面；焦點既然留在本頁，
+// 一併補上播放鍵（Space/K、←→ ±5s、F 全螢幕、M 靜音），體感同 YouTube
 document.addEventListener("keydown", function (e) {
   if (e.ctrlKey || e.metaKey || e.altKey) return;
   var k = e.key.toLowerCase();
@@ -172,6 +190,19 @@ document.addEventListener("keydown", function (e) {
     save(); applySettings();
   } else if (k === "h" && !e.repeat) {
     document.body.classList.add("peek");
+  } else if (k === " " || k === "k") {
+    e.preventDefault();
+    togglePlay();
+  } else if (k === "arrowleft") {
+    e.preventDefault();
+    seekBy(-5);
+  } else if (k === "arrowright") {
+    e.preventDefault();
+    seekBy(5);
+  } else if (k === "f") {
+    toggleFull();
+  } else if (k === "m" && yt && yt.isMuted) {
+    if (yt.isMuted()) yt.unMute(); else yt.mute();
   }
 });
 document.addEventListener("keyup", function (e) {
