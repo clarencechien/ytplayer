@@ -34,7 +34,20 @@ Caption track 有四個層級，每層是不同的題目（詳見 [docs/handoff-
 ## 現況
 
 MVP 完整可用：ingest → （英文 ASR 修稿）→ glossary → 分塊翻譯 → deterministic 驗證/fail-fast → 自動譯註 → player。
-prompt 目前 **v4**；worker 測試 59 個。品質防線與所有實證教訓見 **[docs/lessons-learned.md](docs/lessons-learned.md)**（kvsplayer 合流的接軌指南也在裡面）。
+prompt 目前 **v4**；worker 測試 63 個。品質防線與所有實證教訓見 **[docs/lessons-learned.md](docs/lessons-learned.md)**。
+kvsplayer 合併與否的分析（架構差異 / ADR / go–no-go）見 **[docs/kvsplayer-merge-todo.md](docs/kvsplayer-merge-todo.md)**。
+
+### Player 操作（與 YouTube 慣例一致）
+
+| 鍵 | 功能 | | 鍵 | 功能 |
+|---|---|---|---|---|
+| Space / K | 播放/暫停 | | C | 字幕開/關 |
+| ← / → | ±5 秒 | | **按住 H** | 字幕暫時隱形（看畫面） |
+| F | 全螢幕 | | Shift+< / > | 播放速度 |
+| M | 靜音 | | 單擊影片 / 雙擊 | 播放暫停 / 全螢幕 |
+
+按鈕列另有：字幕模式（雙語/只中/只原文/無）、譯註開關、字級、透明度、速度、
+「YT 介面：鎖定/開放」（開放時可直接操作原生控制列，例如畫質齒輪）。
 
 ## Repo 結構與文件
 

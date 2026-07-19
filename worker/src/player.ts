@@ -87,6 +87,27 @@ const STYLE = `
   .msg { padding: 14px; color: var(--dim); font-size: 13px; }
   .msg a { color: var(--en); }
 
+  /* 首次導覽 */
+  #welcome {
+    position: fixed; inset: 0; z-index: 50; display: flex;
+    align-items: center; justify-content: center; background: rgba(0,0,0,.7);
+  }
+  #welcome.hidden { display: none; }
+  #welcome .card {
+    background: var(--panel); border: 1px solid var(--line); border-radius: 12px;
+    max-width: 520px; width: calc(100% - 40px); max-height: 85vh; overflow-y: auto;
+    padding: 20px 22px;
+  }
+  #welcome h2 { font-size: 16px; margin-bottom: 10px; }
+  #welcome table { width: 100%; border-collapse: collapse; font-size: 13px; margin: 8px 0; }
+  #welcome td { padding: 4px 6px; border-bottom: 1px solid var(--line); }
+  #welcome td.k { color: var(--accent); white-space: nowrap; font-variant-numeric: tabular-nums; width: 110px; }
+  #welcome .tip { color: var(--dim); font-size: 12px; margin: 8px 0; line-height: 1.6; }
+  #welcome button {
+    width: 100%; margin-top: 10px; padding: 9px; border: 0; border-radius: 8px;
+    background: var(--accent); color: #000; font-weight: 700; cursor: pointer; font-size: 14px;
+  }
+
   @media (max-width: 860px) {
     main { flex-direction: column; }
     aside { max-width: none; min-width: 0; border-left: 0; border-top: 1px solid var(--line); flex: 1; }
@@ -119,6 +140,7 @@ export function watchPage(videoId: string): string {
     <button id="btnSpeed" title="快捷鍵 Shift+&lt; / Shift+&gt;">速度：1x</button>
     <button id="btnLock" title="開放：可直接操作 YouTube 原生介面（畫質等）；期間點影片後熱鍵可能失效，鎖回即恢復">YT 介面：鎖定</button>
     <button id="btnFull">⛶ 全螢幕</button>
+    <button id="btnHelp" title="操作說明與快捷鍵">？</button>
   </div>
 </header>
 <main>
@@ -130,10 +152,30 @@ export function watchPage(videoId: string): string {
     </div>
   </div>
   <aside>
-    <div class="head">逐句稿（點擊跳轉）・C 字幕開關・按住 H 暫看畫面・Space 播放・←→ ±5s・F 全螢幕</div>
+    <div class="head">逐句稿（點擊跳轉）・C 字幕開關・按住 H 暫看畫面・？看完整說明</div>
     <div id="list"></div>
   </aside>
 </main>
+<div id="welcome" class="hidden">
+  <div class="card">
+    <h2>ytplayer 操作指南</h2>
+    <div class="tip">影片區：<b>單擊＝播放/暫停・雙擊＝全螢幕</b>（由本頁接管，快捷鍵才能隨時生效）</div>
+    <table>
+      <tr><td class="k">Space / K</td><td>播放 / 暫停</td></tr>
+      <tr><td class="k">← / →</td><td>快退 / 快進 5 秒</td></tr>
+      <tr><td class="k">F・M</td><td>全螢幕・靜音</td></tr>
+      <tr><td class="k">Shift + &lt; / &gt;</td><td>播放速度（同 YouTube）</td></tr>
+      <tr><td class="k">C</td><td>字幕開 / 關</td></tr>
+      <tr><td class="k">按住 H</td><td>字幕暫時隱形，放開恢復 — 看畫面上的資訊用</td></tr>
+    </table>
+    <div class="tip">
+      按鈕列：字幕模式（雙語→只中→只原文→無）、譯註、字級 A±、透明度、速度。<br>
+      要動 YouTube 原生介面（畫質齒輪等）→ 按「YT 介面：開放」，用完鎖回。<br>
+      右側逐句稿點任一句可跳轉；黃色小字是譯註（術語第一次出現時自動附上白話解釋）。
+    </div>
+    <button id="welcomeOk">知道了，開始看片（之後按 ？ 可再看）</button>
+  </div>
+</div>
 <script>
 var VID = ${JSON.stringify(videoId)};
 var MODES = [["both","字幕：雙語"],["zh","字幕：只中"],["en","字幕：只原文"],["off","字幕：無"]];
@@ -240,6 +282,16 @@ document.addEventListener("keyup", function (e) {
   if (e.key.toLowerCase() === "h") document.body.classList.remove("peek");
 });
 window.addEventListener("blur", function () { document.body.classList.remove("peek"); });
+
+// 首次導覽：看過一次就不再自動跳（？按鈕隨時可叫回）
+var welcome = document.getElementById("welcome");
+if (!localStorage.getItem("ytplayer-welcome-v1")) welcome.classList.remove("hidden");
+document.getElementById("welcomeOk").onclick = function () {
+  localStorage.setItem("ytplayer-welcome-v1", "1");
+  welcome.classList.add("hidden");
+};
+document.getElementById("btnHelp").onclick = function () { welcome.classList.remove("hidden"); };
+welcome.addEventListener("click", function (e) { if (e.target === welcome) document.getElementById("welcomeOk").click(); });
 
 applySettings();
 
