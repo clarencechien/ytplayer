@@ -46,6 +46,10 @@ const STYLE = `
   }
   body.peek #subBand { opacity: .06; } /* 按住 H：暫看畫面 */
   body[data-mode="off"] #subBand { display: none; }
+
+  /* 透明點擊層：點影片=播放/暫停由我們接手，焦點不會掉進 iframe、熱鍵永遠有效。
+     底部留 90px 給 YouTube 原生控制列（進度條/音量仍可直接操作） */
+  #clickLayer { position: absolute; inset: 0 0 90px 0; z-index: 4; cursor: pointer; }
   #subEn, #subZh, #subNote {
     width: fit-content; max-width: 92%;
     background: rgba(8,10,14,.72); border-radius: .4em; padding: .1em .55em;
@@ -111,6 +115,7 @@ export function watchPage(videoId: string): string {
     <button id="btnSmaller">A−</button>
     <button id="btnBigger">A＋</button>
     <button id="btnAlpha" title="字幕底色/文字整體透明度">透明度：100%</button>
+    <button id="btnSpeed" title="快捷鍵 Shift+&lt; / Shift+&gt;">速度：1x</button>
     <button id="btnFull">⛶ 全螢幕</button>
   </div>
 </header>
@@ -118,19 +123,20 @@ export function watchPage(videoId: string): string {
   <div class="stage" id="stage">
     <div class="video-wrap">
       <div id="player"></div>
+      <div id="clickLayer" title="點擊：播放/暫停・雙擊：全螢幕"></div>
       <div id="subBand"><div id="subEn"></div><div id="subZh"></div><div id="subNote"></div></div>
     </div>
   </div>
   <aside>
-    <div class="head">逐句稿（點擊跳轉）・快捷鍵：C 開關字幕、按住 H 暫看畫面</div>
+    <div class="head">逐句稿（點擊跳轉）・C 字幕開關・按住 H 暫看畫面・Space 播放・←→ ±5s・F 全螢幕</div>
     <div id="list"></div>
   </aside>
 </main>
 <script>
 var VID = ${JSON.stringify(videoId)};
 var MODES = [["both","字幕：雙語"],["zh","字幕：只中"],["en","字幕：只原文"],["off","字幕：無"]];
-var OFF = 3, ALPHAS = [1, 0.75, 0.5, 0.25];
-var S = { mode: 0, notes: true, follow: true, scale: 1, alpha: 0 };
+var OFF = 3, ALPHAS = [1, 0.75, 0.5, 0.25], SPEEDS = [0.75, 1, 1.25, 1.5, 1.75, 2];
+var S = { mode: 0, notes: true, follow: true, scale: 1, alpha: 0, speed: 1 };
 var prevMode = 0; // C 鍵切回「無」之前的模式
 try { Object.assign(S, JSON.parse(localStorage.getItem("ytplayer-settings") || "{}")); } catch (e) {}
 var cues = [], rows = [], cur = -1;
@@ -149,20 +155,37 @@ function applySettings() {
   document.documentElement.style.setProperty("--scale", S.scale);
   document.documentElement.style.setProperty("--band-alpha", ALPHAS[S.alpha] || 1);
   document.getElementById("btnAlpha").textContent = "透明度：" + Math.round((ALPHAS[S.alpha] || 1) * 100) + "%";
+  document.getElementById("btnSpeed").textContent = "速度：" + (SPEEDS[S.speed] || 1) + "x";
+  if (yt && yt.setPlaybackRate) yt.setPlaybackRate(SPEEDS[S.speed] || 1);
 }
 document.getElementById("btnMode").onclick = function () { S.mode = (S.mode + 1) % MODES.length; save(); applySettings(); };
 document.getElementById("btnAlpha").onclick = function () { S.alpha = (S.alpha + 1) % ALPHAS.length; save(); applySettings(); };
+document.getElementById("btnSpeed").onclick = function () { S.speed = (S.speed + 1) % SPEEDS.length; save(); applySettings(); };
+function stepSpeed(d) { S.speed = Math.min(SPEEDS.length - 1, Math.max(0, S.speed + d)); save(); applySettings(); }
 document.getElementById("btnNotes").onclick = function () { S.notes = !S.notes; save(); applySettings(); };
 document.getElementById("btnFollow").onclick = function () { S.follow = !S.follow; save(); applySettings(); };
 document.getElementById("btnSmaller").onclick = function () { S.scale = Math.max(0.7, +(S.scale - 0.1).toFixed(2)); save(); applySettings(); };
 document.getElementById("btnBigger").onclick = function () { S.scale = Math.min(1.8, +(S.scale + 0.1).toFixed(2)); save(); applySettings(); };
-document.getElementById("btnFull").onclick = function () {
+function toggleFull() {
   var st = document.getElementById("stage");
   if (document.fullscreenElement) document.exitFullscreen(); else st.requestFullscreen();
-};
+}
+document.getElementById("btnFull").onclick = toggleFull;
 
-// 快捷鍵（只在本頁面生效；iframe 有焦點時鍵盤事件進不來，不會跟 YouTube 熱鍵打架）
-// C：開/關字幕（記住上一個模式）；按住 H：字幕幾乎全透明暫看畫面，放開恢復
+function togglePlay() {
+  if (!yt || !yt.getPlayerState) return;
+  if (yt.getPlayerState() === 1) yt.pauseVideo(); else yt.playVideo();
+}
+function seekBy(sec) {
+  if (yt && yt.getCurrentTime) yt.seekTo(Math.max(0, yt.getCurrentTime() + sec), true);
+}
+// 點擊層：播放控制由我們接手，焦點不進 iframe → 熱鍵（含全螢幕時）永遠有效
+var clickLayer = document.getElementById("clickLayer");
+clickLayer.onclick = togglePlay;
+clickLayer.ondblclick = toggleFull;
+
+// 快捷鍵：C 開關字幕、按住 H 暫看畫面；焦點既然留在本頁，
+// 一併補上播放鍵（Space/K、←→ ±5s、F 全螢幕、M 靜音），體感同 YouTube
 document.addEventListener("keydown", function (e) {
   if (e.ctrlKey || e.metaKey || e.altKey) return;
   var k = e.key.toLowerCase();
@@ -172,6 +195,23 @@ document.addEventListener("keydown", function (e) {
     save(); applySettings();
   } else if (k === "h" && !e.repeat) {
     document.body.classList.add("peek");
+  } else if (k === " " || k === "k") {
+    e.preventDefault();
+    togglePlay();
+  } else if (k === "arrowleft") {
+    e.preventDefault();
+    seekBy(-5);
+  } else if (k === "arrowright") {
+    e.preventDefault();
+    seekBy(5);
+  } else if (k === "f") {
+    toggleFull();
+  } else if (e.key === "<") {
+    stepSpeed(-1);
+  } else if (e.key === ">") {
+    stepSpeed(1);
+  } else if (k === "m" && yt && yt.isMuted) {
+    if (yt.isMuted()) yt.unMute(); else yt.mute();
   }
 });
 document.addEventListener("keyup", function (e) {
@@ -186,7 +226,11 @@ tag.src = "https://www.youtube.com/iframe_api";
 document.head.appendChild(tag);
 window.onYouTubeIframeAPIReady = function () { ytReady = true; if (pendingInit) createYT(); };
 function createYT() {
-  yt = new YT.Player("player", { videoId: VID, playerVars: { rel: 0, playsinline: 1, cc_load_policy: 0 } });
+  yt = new YT.Player("player", {
+    videoId: VID,
+    playerVars: { rel: 0, playsinline: 1, cc_load_policy: 0 },
+    events: { onReady: function () { if (yt.setPlaybackRate) yt.setPlaybackRate(SPEEDS[S.speed] || 1); } },
+  });
 }
 
 function fmtTime(t) {
