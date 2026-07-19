@@ -115,6 +115,7 @@ export function watchPage(videoId: string): string {
     <button id="btnSmaller">A−</button>
     <button id="btnBigger">A＋</button>
     <button id="btnAlpha" title="字幕底色/文字整體透明度">透明度：100%</button>
+    <button id="btnSpeed" title="快捷鍵 Shift+&lt; / Shift+&gt;">速度：1x</button>
     <button id="btnFull">⛶ 全螢幕</button>
   </div>
 </header>
@@ -134,8 +135,8 @@ export function watchPage(videoId: string): string {
 <script>
 var VID = ${JSON.stringify(videoId)};
 var MODES = [["both","字幕：雙語"],["zh","字幕：只中"],["en","字幕：只原文"],["off","字幕：無"]];
-var OFF = 3, ALPHAS = [1, 0.75, 0.5, 0.25];
-var S = { mode: 0, notes: true, follow: true, scale: 1, alpha: 0 };
+var OFF = 3, ALPHAS = [1, 0.75, 0.5, 0.25], SPEEDS = [0.75, 1, 1.25, 1.5, 1.75, 2];
+var S = { mode: 0, notes: true, follow: true, scale: 1, alpha: 0, speed: 1 };
 var prevMode = 0; // C 鍵切回「無」之前的模式
 try { Object.assign(S, JSON.parse(localStorage.getItem("ytplayer-settings") || "{}")); } catch (e) {}
 var cues = [], rows = [], cur = -1;
@@ -154,9 +155,13 @@ function applySettings() {
   document.documentElement.style.setProperty("--scale", S.scale);
   document.documentElement.style.setProperty("--band-alpha", ALPHAS[S.alpha] || 1);
   document.getElementById("btnAlpha").textContent = "透明度：" + Math.round((ALPHAS[S.alpha] || 1) * 100) + "%";
+  document.getElementById("btnSpeed").textContent = "速度：" + (SPEEDS[S.speed] || 1) + "x";
+  if (yt && yt.setPlaybackRate) yt.setPlaybackRate(SPEEDS[S.speed] || 1);
 }
 document.getElementById("btnMode").onclick = function () { S.mode = (S.mode + 1) % MODES.length; save(); applySettings(); };
 document.getElementById("btnAlpha").onclick = function () { S.alpha = (S.alpha + 1) % ALPHAS.length; save(); applySettings(); };
+document.getElementById("btnSpeed").onclick = function () { S.speed = (S.speed + 1) % SPEEDS.length; save(); applySettings(); };
+function stepSpeed(d) { S.speed = Math.min(SPEEDS.length - 1, Math.max(0, S.speed + d)); save(); applySettings(); }
 document.getElementById("btnNotes").onclick = function () { S.notes = !S.notes; save(); applySettings(); };
 document.getElementById("btnFollow").onclick = function () { S.follow = !S.follow; save(); applySettings(); };
 document.getElementById("btnSmaller").onclick = function () { S.scale = Math.max(0.7, +(S.scale - 0.1).toFixed(2)); save(); applySettings(); };
@@ -201,6 +206,10 @@ document.addEventListener("keydown", function (e) {
     seekBy(5);
   } else if (k === "f") {
     toggleFull();
+  } else if (e.key === "<") {
+    stepSpeed(-1);
+  } else if (e.key === ">") {
+    stepSpeed(1);
   } else if (k === "m" && yt && yt.isMuted) {
     if (yt.isMuted()) yt.unMute(); else yt.mute();
   }
@@ -217,7 +226,11 @@ tag.src = "https://www.youtube.com/iframe_api";
 document.head.appendChild(tag);
 window.onYouTubeIframeAPIReady = function () { ytReady = true; if (pendingInit) createYT(); };
 function createYT() {
-  yt = new YT.Player("player", { videoId: VID, playerVars: { rel: 0, playsinline: 1, cc_load_policy: 0 } });
+  yt = new YT.Player("player", {
+    videoId: VID,
+    playerVars: { rel: 0, playsinline: 1, cc_load_policy: 0 },
+    events: { onReady: function () { if (yt.setPlaybackRate) yt.setPlaybackRate(SPEEDS[S.speed] || 1); } },
+  });
 }
 
 function fmtTime(t) {
