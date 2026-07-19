@@ -48,8 +48,9 @@ const STYLE = `
   body[data-mode="off"] #subBand { display: none; }
 
   /* 透明點擊層：點影片=播放/暫停由我們接手，焦點不會掉進 iframe、熱鍵永遠有效。
-     底部留 90px 給 YouTube 原生控制列（進度條/音量仍可直接操作） */
+     底部留 90px；「YT 介面：開放」時整層讓開，原生控制全部可直接操作 */
   #clickLayer { position: absolute; inset: 0 0 90px 0; z-index: 4; cursor: pointer; }
+  body.unlock #clickLayer { display: none; }
   #subEn, #subZh, #subNote {
     width: fit-content; max-width: 92%;
     background: rgba(8,10,14,.72); border-radius: .4em; padding: .1em .55em;
@@ -116,6 +117,7 @@ export function watchPage(videoId: string): string {
     <button id="btnBigger">A＋</button>
     <button id="btnAlpha" title="字幕底色/文字整體透明度">透明度：100%</button>
     <button id="btnSpeed" title="快捷鍵 Shift+&lt; / Shift+&gt;">速度：1x</button>
+    <button id="btnLock" title="開放：可直接操作 YouTube 原生介面（畫質等）；期間點影片後熱鍵可能失效，鎖回即恢復">YT 介面：鎖定</button>
     <button id="btnFull">⛶ 全螢幕</button>
   </div>
 </header>
@@ -184,6 +186,16 @@ var clickLayer = document.getElementById("clickLayer");
 clickLayer.onclick = togglePlay;
 clickLayer.ondblclick = toggleFull;
 
+// 「YT 介面：開放」：暫時撤掉點擊層，讓原生控制列（畫質齒輪等）可直接操作
+var unlocked = false;
+document.getElementById("btnLock").onclick = function () {
+  unlocked = !unlocked;
+  document.body.classList.toggle("unlock", unlocked);
+  this.textContent = "YT 介面：" + (unlocked ? "開放中" : "鎖定");
+  this.classList.toggle("on", unlocked);
+  if (!unlocked) window.focus(); // 鎖回時把焦點拿回來，熱鍵立即恢復
+};
+
 // 快捷鍵：C 開關字幕、按住 H 暫看畫面；焦點既然留在本頁，
 // 一併補上播放鍵（Space/K、←→ ±5s、F 全螢幕、M 靜音），體感同 YouTube
 document.addEventListener("keydown", function (e) {
@@ -229,7 +241,13 @@ function createYT() {
   yt = new YT.Player("player", {
     videoId: VID,
     playerVars: { rel: 0, playsinline: 1, cc_load_policy: 0 },
-    events: { onReady: function () { if (yt.setPlaybackRate) yt.setPlaybackRate(SPEEDS[S.speed] || 1); } },
+    events: {
+      onReady: function () {
+        if (yt.setPlaybackRate) yt.setPlaybackRate(SPEEDS[S.speed] || 1);
+        // 我們的字幕層就是 CC — 原生 CC 一律關（否則 ingest 時開的 CC 是帳號黏性設定，embed 會跟著開，兩層疊在一起）
+        try { yt.unloadModule("captions"); yt.unloadModule("cc"); } catch (e) { /* 模組不存在就算了 */ }
+      },
+    },
   });
 }
 
