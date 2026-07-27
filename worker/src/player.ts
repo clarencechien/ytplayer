@@ -138,6 +138,27 @@ const STYLE = `
   body.mobile .controls { margin-left: 0; }
   body.mobile .controls button { padding: 3px 8px; font-size: 11px; }
   #clickLayer { touch-action: manipulation; }
+
+  /* mobile 橫向 = 沉浸看片：影片滿版、字幕回到疊加、header/逐句稿收起
+     （16:9 滿寬在橫向就是滿版，下方字幕會被推出畫面 — 所以疊加是唯一解；
+     轉回直向即恢復所有控制） */
+  @media (orientation: landscape) {
+    body.mobile header, body.mobile aside { display: none; }
+    body.mobile .stage { flex: 1; position: relative; }
+    body.mobile .video-wrap { aspect-ratio: auto; flex: 1; }
+    body.mobile #subBand {
+      position: absolute; left: 0; right: 0; bottom: 6%; z-index: 6;
+      background: none; border: 0; padding: 0 4%;
+      pointer-events: none; text-align: center; align-items: center; gap: 4px;
+    }
+    body.mobile #subEn, body.mobile #subZh, body.mobile #subNote {
+      background: rgba(8,10,14,.72); border-radius: .4em; padding: .1em .55em;
+      width: fit-content; max-width: 92%; margin: 0;
+      text-shadow: 0 1px 2px rgba(0,0,0,.8);
+    }
+    body.mobile #subZh, body.mobile #subEn { font-size: calc(clamp(16px, 2.2vw, 26px) * var(--scale)); }
+    body.mobile #subNote { font-size: calc(12px * var(--scale)); }
+  }
 `;
 
 export function watchPage(videoId: string): string {
