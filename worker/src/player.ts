@@ -11,7 +11,8 @@ const STYLE = `
   body {
     background: var(--bg); color: var(--fg);
     font-family: "Noto Sans TC", "PingFang TC", "Microsoft JhengHei", sans-serif;
-    height: 100vh; display: flex; flex-direction: column; overflow: hidden;
+    height: 100vh; height: 100dvh; /* iOS Safari 的 100vh 會被網址列吃掉 */
+    display: flex; flex-direction: column; overflow: hidden;
   }
   header {
     padding: 10px 16px; border-bottom: 1px solid var(--line);
@@ -114,6 +115,29 @@ const STYLE = `
     .stage { flex: 0 0 auto; }
     .video-wrap { aspect-ratio: 16/9; flex: none; }
   }
+
+  /* mobile 模式（touch 裝置，JS 偵測後加 body.mobile）：
+     字幕不疊影片 — subBand 由 JS 移到影片下方成常駐區塊，畫面完全不被遮 */
+  body.mobile main { flex-direction: column; }
+  body.mobile .stage { flex: 0 0 auto; }
+  body.mobile .video-wrap { aspect-ratio: 16/9; flex: none; }
+  body.mobile aside { max-width: none; min-width: 0; border-left: 0; border-top: 1px solid var(--line); flex: 1; }
+  body.mobile #subBand {
+    position: static; pointer-events: auto; text-align: left;
+    align-items: stretch; gap: 3px; padding: 8px 12px;
+    background: var(--panel); border-bottom: 1px solid var(--line);
+  }
+  body.mobile #subEn, body.mobile #subZh, body.mobile #subNote {
+    background: none; max-width: 100%; width: auto; padding: 0; text-shadow: none;
+  }
+  body.mobile #subZh, body.mobile #subEn { font-size: calc(16px * var(--scale)); line-height: 1.45; }
+  body.mobile #subNote { font-size: calc(12px * var(--scale)); }
+  body.mobile header { padding: 6px 10px; gap: 6px; }
+  body.mobile header h1 { font-size: 13px; }
+  body.mobile header .meta { display: none; }
+  body.mobile .controls { margin-left: 0; }
+  body.mobile .controls button { padding: 3px 8px; font-size: 11px; }
+  #clickLayer { touch-action: manipulation; }
 `;
 
 export function watchPage(videoId: string): string {
@@ -159,19 +183,29 @@ export function watchPage(videoId: string): string {
 <div id="welcome" class="hidden">
   <div class="card">
     <h2>ytplayer 操作指南</h2>
-    <div class="tip">影片區：<b>單擊＝播放/暫停・雙擊＝全螢幕</b>（由本頁接管，快捷鍵才能隨時生效）</div>
-    <table>
-      <tr><td class="k">Space / K</td><td>播放 / 暫停</td></tr>
-      <tr><td class="k">← / →</td><td>快退 / 快進 5 秒</td></tr>
-      <tr><td class="k">F・M</td><td>全螢幕・靜音</td></tr>
-      <tr><td class="k">Shift + &lt; / &gt;</td><td>播放速度（同 YouTube）</td></tr>
-      <tr><td class="k">C</td><td>字幕開 / 關</td></tr>
-      <tr><td class="k">按住 H</td><td>字幕暫時隱形，放開恢復 — 看畫面上的資訊用</td></tr>
-    </table>
-    <div class="tip">
-      按鈕列：字幕模式（雙語→只中→只原文→無）、譯註、字級 A±、透明度、速度。<br>
-      要動 YouTube 原生介面（畫質齒輪等）→ 按「YT 介面：開放」，用完鎖回。<br>
-      右側逐句稿點任一句可跳轉；黃色小字是譯註（術語第一次出現時自動附上白話解釋）。
+    <div id="wDesktop">
+      <div class="tip">影片區：<b>單擊＝播放/暫停・雙擊＝全螢幕</b>（由本頁接管，快捷鍵才能隨時生效）</div>
+      <table>
+        <tr><td class="k">Space / K</td><td>播放 / 暫停</td></tr>
+        <tr><td class="k">← / →</td><td>快退 / 快進 5 秒</td></tr>
+        <tr><td class="k">F・M</td><td>全螢幕・靜音</td></tr>
+        <tr><td class="k">Shift + &lt; / &gt;</td><td>播放速度（同 YouTube）</td></tr>
+        <tr><td class="k">C</td><td>字幕開 / 關</td></tr>
+        <tr><td class="k">按住 H</td><td>字幕暫時隱形，放開恢復 — 看畫面上的資訊用</td></tr>
+      </table>
+      <div class="tip">
+        按鈕列：字幕模式（雙語→只中→只原文→無）、譯註、字級 A±、透明度、速度。<br>
+        要動 YouTube 原生介面（畫質齒輪等）→ 按「YT 介面：開放」，用完鎖回。<br>
+        右側逐句稿點任一句可跳轉；黃色小字是譯註（術語第一次出現時自動附上白話解釋）。
+      </div>
+    </div>
+    <div id="wMobile" style="display:none">
+      <div class="tip">
+        <b>點影片＝播放 / 暫停</b>；字幕在影片下方，不會遮住畫面。<br>
+        下方逐句稿點任一句可跳轉；黃色小字是譯註（術語第一次出現時的白話解釋）。<br>
+        按鈕列：字幕模式（雙語→只中→只原文→無）、譯註、字級 A±、速度。<br>
+        要用 YouTube 原生介面（音量、畫質）→ 按「YT 介面：開放」，用完鎖回。
+      </div>
     </div>
     <button id="welcomeOk">知道了，開始看片（之後按 ？ 可再看）</button>
   </div>
@@ -180,7 +214,10 @@ export function watchPage(videoId: string): string {
 var VID = ${JSON.stringify(videoId)};
 var MODES = [["both","字幕：雙語"],["zh","字幕：只中"],["en","字幕：只原文"],["off","字幕：無"]];
 var OFF = 3, ALPHAS = [1, 0.75, 0.5, 0.25], SPEEDS = [0.75, 1, 1.25, 1.5, 1.75, 2];
-var S = { mode: 0, notes: true, follow: true, scale: 1, alpha: 0, speed: 1 };
+// mobile 偵測：touch 為主、UA 為輔
+var MOBILE = (window.matchMedia && matchMedia("(pointer: coarse)").matches) ||
+  /iPhone|iPad|Android/i.test(navigator.userAgent);
+var S = { mode: 0, notes: true, follow: !MOBILE, scale: 1, alpha: 0, speed: 1 };
 var prevMode = 0; // C 鍵切回「無」之前的模式
 try { Object.assign(S, JSON.parse(localStorage.getItem("ytplayer-settings") || "{}")); } catch (e) {}
 var cues = [], rows = [], cur = -1;
@@ -282,6 +319,20 @@ document.addEventListener("keyup", function (e) {
   if (e.key.toLowerCase() === "h") document.body.classList.remove("peek");
 });
 window.addEventListener("blur", function () { document.body.classList.remove("peek"); });
+
+// mobile 模式：字幕帶移出影片（不遮畫面）、隱藏觸控用不到的東西
+if (MOBILE) {
+  document.body.classList.add("mobile");
+  document.getElementById("stage").appendChild(document.getElementById("subBand"));
+  document.querySelector("aside .head").textContent = "逐句稿（點擊跳轉）";
+  document.getElementById("wDesktop").style.display = "none";
+  document.getElementById("wMobile").style.display = "";
+  document.getElementById("btnAlpha").style.display = "none"; // 字幕已不疊影片，透明度無意義
+}
+// iPhone Safari 不支援網頁元素全螢幕 API，藏掉假按鈕
+if (!document.documentElement.requestFullscreen) {
+  document.getElementById("btnFull").style.display = "none";
+}
 
 // 首次導覽：看過一次就不再自動跳（？按鈕隨時可叫回）
 var welcome = document.getElementById("welcome");
@@ -385,7 +436,7 @@ function tick() {
   subEn.textContent = c.en;
   subNote.textContent = c.note || "";
   rows[idx].classList.add("cur");
-  if (S.follow) rows[idx].scrollIntoView({ block: "center", behavior: "smooth" });
+  if (S.follow) rows[idx].scrollIntoView({ block: MOBILE ? "nearest" : "center", behavior: "smooth" });
 }
 
 load();
