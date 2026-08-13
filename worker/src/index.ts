@@ -13,12 +13,14 @@
 // 見 asr-language-experiment.md §4）；cron 是零成本看門狗。
 
 import { validateIngest } from './validate';
+import { migrateKvs } from './migrate';
 import { listVideos, routeSource } from './pipeline';
 import { handleJob, watchdog, type JobMsg, type MsgLike, type WatchRequest } from './jobs';
 import { watchPage, indexPage, adminPage } from './player';
 
 export interface Env {
   SUBS: R2Bucket;
+  KVS?: R2Bucket; // kvsplayer 舊資料（M4 遷移用，M5 收尾後移除綁定）
   JOBS: Queue<JobMsg>;
   INGEST_KEY?: string;
   GEMINI_API_KEY?: string;
@@ -144,6 +146,14 @@ export default {
         { ok: true, accepted: videoId, route: 'video', note: '看片任務已排入，進度看 /subs/{videoId}/status.json' },
         202
       );
+    }
+
+    // M4 一次性遷移：kvsplayer R2（kvs-krsub）→ schema v2。純 R2 拷貝零 LLM，可重跑。
+    if (req.method === 'POST' && path === '/migrate-kvs') {
+      if (!authorized) return json({ ok: false, error: 'unauthorized' }, 403);
+      if (!env.KVS) return json({ ok: false, error: '未綁定 KVS bucket（wrangler.jsonc r2_buckets）' }, 500);
+      const r = await migrateKvs(env.KVS, env.SUBS, url.searchParams.get('overwrite') === '1');
+      return json({ ok: true, ...r });
     }
 
     // 手動排入翻譯：非同步（202 即回），進度看 /subs/{id}/status.json
