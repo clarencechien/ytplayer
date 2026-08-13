@@ -15,7 +15,9 @@
    | Deploy command | `npm run deploy:ci` |
 3. 按下 Deploy。`deploy:ci` 會先嘗試建立 R2 bucket `ytplayer-subs` 再部署；
    若 log 顯示 bucket 建立失敗（build token 權限不足），到 **R2 → Create bucket** 手動建一個叫
-   `ytplayer-subs` 的 bucket，然後 retry deployment。這是唯一可能需要的手動步驟。
+   `ytplayer-subs` 的 bucket，然後 retry deployment。
+   另需 **Queues**（Workers Paid）：Dashboard → **Queues → Create** → 名稱 `ytplayer-jobs`
+   （翻譯 pipeline 拆成小步在 queue 上自我續鏈，見 [docs/migration.md](../docs/migration.md) §2）。
 4. **（建議）鎖上寫入權限**：Worker `ytplayer` → Settings → Variables and Secrets →
    Add → type 選 **Secret**，名稱 `INGEST_KEY`，值隨便一串長隨機字串。
    沒設也能動（方便先跑通），但任何知道網址的人都能寫入你的 bucket。
@@ -37,12 +39,16 @@
 | GET | `/` | 公開 | 影片清單頁（player 入口） |
 | GET | `/watch/{videoId}` | 公開 | Player 頁（iframe + 雙語字幕層 + 逐句稿） |
 | GET | `/videos.json` | **key** | 清單資料（等於觀看紀錄，不對外） |
-| GET | `/subs/{videoId}/{file}` | 公開 | `source/sentences/glossary/bilingual/info.json`、`bilingual.srt` |
+| GET | `/subs/{videoId}/{file}` | 公開 | `source/sentences/glossary/bilingual/info/status.json`、`bilingual.srt` |
 | GET | `/health` | 公開 | 狀態（`ingestKeyConfigured` 要是 `true`） |
-| POST | `/ingest` | key | 收 ext payload，存 `subs/{videoId}/source.json` |
-| POST | `/translate/{videoId}` | key | 手動觸發翻譯，**預設非同步**（202 ack，結果寫進 `last-run.json`）。`?force=1` 忽略 cache、`?wait=1` 同步等結果（僅適合短片） |
+| GET | `/robots.txt` | 公開 | 允許抓取（全站另有 `X-Robots-Tag: noindex` — 擋爬會讓 noindex 看不見） |
+| POST | `/ingest` | key | 收 ext payload，存 source 並**直接排入翻譯佇列** |
+| POST | `/translate/{videoId}` | key | 手動排入佇列（202 ack，進度看 `status.json`）。`?force=1` 忽略 cache、清除失敗標記重跑 |
 
-Cron（`*/5`）自動掃 R2：可翻譯的軌且 bilingual 缺少/過期 → 翻譯，一次一支。
+執行架構：翻譯拆成有界小步（plan → repair → glossary → translate → assemble）在 **Queues**
+上自我續鏈，每步 1–2 分鐘、做完即落地 checkpoint；cron（`*/5`）只是零成本看門狗（補漏，不碰 LLM）。
+花費保險絲四層：Google 端配額（人工設）→ 每步 3 次重試後永久失敗 → 每片 token 上限 → 全域日預算
+（`VIDEO_TOKEN_CAP` / `DAILY_TOKEN_CAP` vars 可調，預設 500k / 2M tokens）。
 
 認證分層：**寫入**（ingest／translate）一律要 key；**影片清單**要 key（等於觀看紀錄）；
 **單片**（`/watch/{id}`、`/subs/{id}/*`）維持公開 —— videoId 本來就是 YouTube 公開資訊，連結才好分享。
@@ -57,15 +63,15 @@ Worker → Settings → Domains & Routes → Add → Custom domain → `ytplayer
 ### 翻譯用法
 
 ```bash
-# 觸發翻譯（立刻回 202；背景跑完，長影片也不會因斷線被砍）
+# 排入翻譯（立刻回 202；queue 上分步跑完，長影片不會被斷線砍掉）
 curl -X POST -H "x-ingest-key: $KEY" "https://ytplayer.ai-apps.work/translate/<videoId>?force=1"
-# 看這次跑的結果（stats / warnings / 錯誤）
-curl "https://ytplayer.ai-apps.work/subs/<videoId>/last-run.json"
+# 看進度（stage/step/tokensUsed；failed 時有 failReason）
+curl "https://ytplayer.ai-apps.work/subs/<videoId>/status.json"
 # 拿字幕
 curl "https://ytplayer.ai-apps.work/subs/<videoId>/bilingual.srt"
 ```
 
-回應的 `stats.warnings` 必須為空才算驗收通過（禁用詞殘留、翻譯失敗都會列在裡面）。
+完成後 `bilingual.json` 的 `warnings` 必須為空才算驗收通過（禁用詞殘留、翻譯失敗都會列在裡面）。
 
 ### Secrets / Vars
 

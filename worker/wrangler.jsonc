@@ -5,11 +5,16 @@
   "compatibility_date": "2026-07-01",
   "observability": { "enabled": true },
   "vars": { "GEMINI_MODEL": "gemini-3.5-flash" },
-  // ⛔ cron 暫停（2026-08-13 成本事故）：外部中止的 run 不會寫 last-run 也不會清鎖，
-  // 形成「每輪重挑同一支 → 燒 API → 被砍 → 再來」的安靜迴圈。
-  // 修好「分段可續跑 + 嘗試次數上限 + 開工即寫 running」（見 docs/asr-language-experiment.md §4.3）之前不得重開。
-  "triggers": { "crons": [] },
+  // cron = 零成本看門狗（migration.md §2）：只掃描 + enqueue，永不碰 LLM。
+  // 2026-08-13 成本事故的三個修法（分段可續跑、嘗試上限、開工即寫狀態）都已落在 queue 步驟裡。
+  "triggers": { "crons": ["*/5 * * * *"] },
   "r2_buckets": [
     { "binding": "SUBS", "bucket_name": "ytplayer-subs" }
-  ]
+  ],
+  // Queues（Workers Paid）：pipeline 拆成有界小步自我續鏈；先在 Dashboard 建 queue `ytplayer-jobs`。
+  // max_retries 3 = 保險絲第 2 層的底；max_concurrency 2 = 花費節流（同時最多兩步在燒）
+  "queues": {
+    "producers": [{ "binding": "JOBS", "queue": "ytplayer-jobs" }],
+    "consumers": [{ "queue": "ytplayer-jobs", "max_batch_size": 1, "max_retries": 3, "max_concurrency": 2 }]
+  }
 }

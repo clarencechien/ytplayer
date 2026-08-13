@@ -9,7 +9,13 @@ export type LlmFn = (prompt: string) => Promise<string>;
 
 const MAX_ATTEMPTS = 4;
 
-export async function geminiGenerate(apiKey: string, model: string, prompt: string): Promise<string> {
+// onTokens：每次成功呼叫回報 usageMetadata.totalTokenCount — 花費保險絲（per-video / per-day）靠它累計
+export async function geminiGenerate(
+  apiKey: string,
+  model: string,
+  prompt: string,
+  onTokens?: (n: number) => void
+): Promise<string> {
   const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`;
   for (let attempt = 0; ; attempt++) {
     const res = await fetch(url, {
@@ -22,8 +28,10 @@ export async function geminiGenerate(apiKey: string, model: string, prompt: stri
     });
     if (res.ok) {
       const data = (await res.json()) as {
+        usageMetadata?: { totalTokenCount?: number };
         candidates?: Array<{ finishReason?: string; content?: { parts?: Array<{ text?: string }> } }>;
       };
+      if (onTokens && data.usageMetadata?.totalTokenCount) onTokens(data.usageMetadata.totalTokenCount);
       const cand = data.candidates?.[0];
       const text = (cand?.content?.parts ?? []).map((p) => p.text ?? '').join('');
       if (!text) throw new Error(`Gemini 回應無文字（finishReason: ${cand?.finishReason ?? '未知'}）`);
