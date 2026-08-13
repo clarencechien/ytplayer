@@ -706,7 +706,8 @@ function refresh() {
           "</span></td>" +
           "<td>" + esc(j.route || "") + "</td>" +
           "<td class='" + stCls(j) + "'>" + esc(stTxt(j)) + "</td>" +
-          "<td class='num'>" + (j.tokensUsed || 0).toLocaleString() + "</td>" +
+          "<td class='num'>" + (j.tokensUsed || 0).toLocaleString() +
+          (j.thoughtTokens > 0 ? "<br><span class='hint'>思考 " + j.thoughtTokens.toLocaleString() + "</span>" : "") + "</td>" +
           "<td class='num'>" + (j.estNTD || 0) + "</td>" +
           "<td class='num'>" + fmtDur(elapsed) + "</td>" +
           "<td class='num'>" + (j.updatedAt ? new Date(j.updatedAt).toLocaleTimeString() : "—") + "</td></tr>";

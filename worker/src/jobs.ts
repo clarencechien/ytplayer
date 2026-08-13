@@ -75,6 +75,9 @@ export interface JobStatus {
   retries: number;
   asrRepaired: number;
   warnings: string[];
+  // token 流向拆解（帳單事故的診斷欄）：thinking 以輸出價計費，是成本大宗嫌疑犯
+  promptTokens?: number;
+  thoughtTokens?: number;
   failed?: boolean;
   failReason?: string;
   // video 路由專用：分段掃描狀態（kvsplayer 的失敗階梯/覆蓋接續都在這）
@@ -92,6 +95,7 @@ export interface JobEnv {
   GEMINI_API_KEY?: string;
   GEMINI_MODEL?: string;
   GEMINI_MEDIA_RES?: string; // 看片解析度，預設 MEDIA_RESOLUTION_MEDIUM（LOW 省 4 倍但字卡辨識差）
+  GEMINI_THINKING_BUDGET?: string; // text 路由 thinking 上限，預設 0（翻譯不需要推理；thinking 以輸出價計費）
   VIDEO_TOKEN_CAP?: string; // text 路由每片 token 上限（保險絲第 3 層），預設 500k
   WATCH_TOKEN_CAP?: string; // video 路由每片上限，預設 3M（看片 ≈ 300 tok/秒，30 分鐘 ≈ 54 萬 + 重試餘裕）
   DAILY_TOKEN_CAP?: string; // 每日全域 token 上限（第 4 層），預設 2M
@@ -156,7 +160,11 @@ async function failStatus(env: JobEnv, videoId: string, reason: string): Promise
 interface StepMeter {
   tokens: number;
   calls: number;
+  prompt: number;
+  thoughts: number;
 }
+
+export const newMeter = (): StepMeter => ({ tokens: 0, calls: 0, prompt: 0, thoughts: 0 });
 
 function makeStepLlm(
   env: JobEnv,
@@ -165,14 +173,23 @@ function makeStepLlm(
   llmOverride?: LlmFn
 ): LlmFn {
   const model = env.GEMINI_MODEL || 'gemini-3.5-flash';
-  const onTokens = (n: number): void => {
-    meter.tokens += n;
-  };
+  // 翻譯/修稿是機械性 JSON 轉換，thinking 預設關（0）— 它以輸出價計費，實測是帳單大宗
+  const thinkingBudget = env.GEMINI_THINKING_BUDGET != null ? Number(env.GEMINI_THINKING_BUDGET) : 0;
   return async (prompt) => {
     if (++meter.calls > maxCalls) throw new Error(`單步 LLM 呼叫超過上限 ${maxCalls} 次，中止（防重試失控）`);
     if (llmOverride) return llmOverride(prompt);
     const { geminiGenerate } = await import('./llm');
-    return geminiGenerate(env.GEMINI_API_KEY!, model, prompt, onTokens);
+    return geminiGenerate(
+      env.GEMINI_API_KEY!,
+      model,
+      prompt,
+      (u) => {
+        meter.tokens += u.total;
+        meter.prompt += u.prompt;
+        meter.thoughts += u.thoughts;
+      },
+      Number.isFinite(thinkingBudget) ? thinkingBudget : 0
+    );
   };
 }
 
@@ -180,6 +197,8 @@ function makeStepLlm(
 async function settle(env: JobEnv, st: JobStatus, meter: StepMeter, retries = 0, asrRepaired = 0): Promise<void> {
   st.tokensUsed += meter.tokens;
   st.llmCalls += meter.calls;
+  st.promptTokens = (st.promptTokens ?? 0) + meter.prompt;
+  st.thoughtTokens = (st.thoughtTokens ?? 0) + meter.thoughts;
   st.retries += retries;
   st.asrRepaired += asrRepaired;
   await writeStatus(env, st);
@@ -293,6 +312,8 @@ async function planVideoStep(env: JobEnv, videoId: string, force: boolean): Prom
     tokensUsed: carry?.tokensUsed ?? 0,
     llmCalls: carry?.llmCalls ?? 0,
     retries: carry?.retries ?? 0,
+    promptTokens: carry?.promptTokens ?? 0,
+    thoughtTokens: carry?.thoughtTokens ?? 0,
     asrRepaired: 0,
     warnings: [],
     // resume 時掃描進度接續（parts 保留、covered_s 續掃，已看過的段不重付）
@@ -317,7 +338,7 @@ async function watchStep(env: JobEnv, videoId: string, watchOverride?: WatchLlmF
   const seg = nextSegment(w);
   if (seg.pastEnd) return { status: 202, body: { ok: true }, next: { videoId, step: 'assemble' } };
 
-  const meter: StepMeter = { tokens: 0, calls: 0 };
+  const meter: StepMeter = newMeter();
   const watchLlm =
     watchOverride ??
     makeGeminiWatch(
@@ -512,6 +533,8 @@ async function planStep(env: JobEnv, videoId: string, force: boolean): Promise<S
     tokensUsed: carry?.tokensUsed ?? 0,
     llmCalls: carry?.llmCalls ?? 0,
     retries: carry?.retries ?? 0,
+    promptTokens: carry?.promptTokens ?? 0,
+    thoughtTokens: carry?.thoughtTokens ?? 0,
     asrRepaired: 0,
     warnings: [],
   };
@@ -551,7 +574,7 @@ async function repairStep(env: JobEnv, videoId: string, batch: number, llmOverri
   }
   const chunks = chunkSentences(pre.sentences).slice(batch * CHUNKS_PER_BATCH, (batch + 1) * CHUNKS_PER_BATCH);
 
-  const meter: StepMeter = { tokens: 0, calls: 0 };
+  const meter: StepMeter = newMeter();
   const llm = makeStepLlm(env, meter, chunks.length * 3 + 2, llmOverride);
   let retries = 0;
   const entries: Array<[number, string]> = [];
@@ -614,7 +637,7 @@ async function glossaryStep(env: JobEnv, videoId: string, llmOverride?: LlmFn): 
   st.translateBatches = Math.ceil(chunkSentences(sentences).length / CHUNKS_PER_BATCH);
 
   const model = env.GEMINI_MODEL || 'gemini-3.5-flash';
-  const meter: StepMeter = { tokens: 0, calls: 0 };
+  const meter: StepMeter = newMeter();
   let retries = 0;
 
   // 冪等：glossary 已是本輪產物就不重打
@@ -674,7 +697,7 @@ async function translateStep(env: JobEnv, videoId: string, batch: number, llmOve
   const allChunks = chunkSentences(sentencesDoc.sentences);
   const chunks = allChunks.slice(batch * CHUNKS_PER_BATCH, (batch + 1) * CHUNKS_PER_BATCH);
 
-  const meter: StepMeter = { tokens: 0, calls: 0 };
+  const meter: StepMeter = newMeter();
   const llm = makeStepLlm(env, meter, chunks.length * 9 + 2, llmOverride); // 含切半分治與禁用詞重打的預算
   let retries = 0;
   const entries: Array<[number, { zh: string; note?: string }]> = [];

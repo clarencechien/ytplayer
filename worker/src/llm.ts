@@ -2,42 +2,77 @@
 // 可重試：429/5xx，以及「User location is not supported」400 —— CF Worker 的
 // 出口 colo 會變（台灣流量常經香港，該區不被 Gemini 支援），同一請求重打
 // 常會走到支援的出口，實測有效。其餘錯誤直接丟。
+//
+// thinking：Gemini 2.5+ 預設開推理，思考 token 以「輸出價」計費。翻譯/修稿是
+// 機械性 JSON 轉換不需要推理 — 預設 thinkingBudget=0（2026-08-13 帳單事故：
+// AI Studio 用量圖 Output 是 Input 的 3–4 倍，全是 thinking）。若模型拒絕
+// budget 0（400 提到 thinking），自動退回不帶 thinkingConfig 再試。
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 export type LlmFn = (prompt: string) => Promise<string>;
 
+export interface LlmUsage {
+  total: number;
+  prompt: number;
+  output: number;
+  thoughts: number;
+}
+
 const MAX_ATTEMPTS = 4;
 
-// onTokens：每次成功呼叫回報 usageMetadata.totalTokenCount — 花費保險絲（per-video / per-day）靠它累計
 export async function geminiGenerate(
   apiKey: string,
   model: string,
   prompt: string,
-  onTokens?: (n: number) => void
+  onUsage?: (u: LlmUsage) => void,
+  thinkingBudget: number | null = 0
 ): Promise<string> {
   const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`;
+  let budget = thinkingBudget;
   for (let attempt = 0; ; attempt++) {
     const res = await fetch(url, {
       method: 'POST',
       headers: { 'content-type': 'application/json', 'x-goog-api-key': apiKey },
       body: JSON.stringify({
         contents: [{ parts: [{ text: prompt }] }],
-        generationConfig: { temperature: 0.2, responseMimeType: 'application/json' },
+        generationConfig: {
+          temperature: 0.2,
+          responseMimeType: 'application/json',
+          ...(budget != null ? { thinkingConfig: { thinkingBudget: budget } } : {}),
+        },
       }),
     });
     if (res.ok) {
       const data = (await res.json()) as {
-        usageMetadata?: { totalTokenCount?: number };
+        usageMetadata?: {
+          totalTokenCount?: number;
+          promptTokenCount?: number;
+          candidatesTokenCount?: number;
+          thoughtsTokenCount?: number;
+        };
         candidates?: Array<{ finishReason?: string; content?: { parts?: Array<{ text?: string }> } }>;
       };
-      if (onTokens && data.usageMetadata?.totalTokenCount) onTokens(data.usageMetadata.totalTokenCount);
+      const u = data.usageMetadata;
+      if (onUsage && u?.totalTokenCount) {
+        onUsage({
+          total: u.totalTokenCount,
+          prompt: u.promptTokenCount ?? 0,
+          output: u.candidatesTokenCount ?? 0,
+          thoughts: u.thoughtsTokenCount ?? 0,
+        });
+      }
       const cand = data.candidates?.[0];
       const text = (cand?.content?.parts ?? []).map((p) => p.text ?? '').join('');
       if (!text) throw new Error(`Gemini 回應無文字（finishReason: ${cand?.finishReason ?? '未知'}）`);
       return text;
     }
     const body = (await res.text()).slice(0, 300);
+    // 模型不接受 thinkingBudget 設定 → 拿掉再試（不計入重試次數上限的消耗也無妨，仍走同一計數）
+    if (res.status === 400 && budget != null && /thinking/i.test(body)) {
+      budget = null;
+      continue;
+    }
     const retryable =
       res.status === 429 || res.status >= 500 || (res.status === 400 && body.includes('location is not supported'));
     if (attempt < MAX_ATTEMPTS - 1 && retryable) {
