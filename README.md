@@ -55,9 +55,11 @@ Caption track 有四個層級，每層是不同的題目（詳見 [docs/handoff-
 - **隱私**：全站 noindex（含 robots.txt 不 Disallow 的陷阱解法）；清單 key-gate；
   `/watch` 公開可分享（已接受的殘餘風險記錄在 [docs/migration.md](docs/migration.md) §5）
 
-prompt 目前 **v4**；worker 測試 **86 個**。品質防線與所有實證教訓見
+prompt 目前 **v4**；worker 測試 **87 個**。品質防線與所有實證教訓見
 **[docs/lessons-learned.md](docs/lessons-learned.md)**；合併決策材料見
 [docs/kvsplayer-merge-todo.md](docs/kvsplayer-merge-todo.md)。
+glossary 目前 text 路由 by video 自動抽、video 路由 by language 靜態表 —
+跨影片一致性的疊層方案見 [docs/glossary-layers.md](docs/glossary-layers.md)（計畫，未實作）。
 待辦：M5 關閉 kvsplayer（刪 Worker/queue、30 天後刪舊 bucket、移除 KVS 綁定）。
 
 ### Player 操作（與 YouTube 慣例一致）
@@ -84,6 +86,7 @@ video 路由的影片另有**字卡層**（🃏 疊畫面上緣、逐句稿有�
 | [docs/handoff.md](docs/handoff.md) | 原始任務書（分階段規格） |
 | [docs/handoff-append-01.md](docs/handoff-append-01.md) | 影片分層策略增補 |
 | [docs/migration.md](docs/migration.md) | **kvsplayer 合併方案與執行紀錄（M0–M5、保險絲設計、隱私）** |
+| [docs/glossary-layers.md](docs/glossary-layers.md) | Glossary 疊層計畫（channel/genre/per-video，未實作） |
 | [docs/phase0-findings.md](docs/phase0-findings.md) | Phase 0 實測結論（POT、CORS、SPA stale…） |
 | [docs/phase1-plan.md](docs/phase1-plan.md) / [docs/phase2-plan.md](docs/phase2-plan.md) | 各階段實作計畫 |
 | [docs/asr-language-experiment.md](docs/asr-language-experiment.md) | 非英文 ASR 實測 + 成本事故解剖 + 端到端驗證 |
