@@ -114,6 +114,10 @@ export default {
           return json({ ok: false, error: e instanceof Error ? e.message : String(e) }, 500);
         }
       }
+      // 先落地豁免標記再開工：即使背景執行被中止，cron 仍會接手把它跑完
+      if (allowAnyAsr) {
+        await env.SUBS.put(`subs/${videoId}/.allow-any-asr`, new Date().toISOString());
+      }
       ctx.waitUntil(runAndRecord(env, videoId, force, allowAnyAsr));
       return json(
         {

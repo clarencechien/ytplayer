@@ -500,14 +500,19 @@ export async function translateNextPending(
     const srcObj = await env.SUBS.get(`subs/${videoId}/source.json`);
     if (!srcObj) continue;
     const srcDoc = JSON.parse(await srcObj.text()) as { track: { languageCode: string; kind?: string | null } };
-    if (!canTranslate(srcDoc)) continue;
+    // 單片豁免標記（實驗用）：非英文 ASR 只有被明確標記的影片才放行，全域預設不變。
+    // 長工作必須走 cron —— 實測 waitUntil 在 686 cues 的日文 ASR 上被 Cloudflare 中止
+    const allowAnyAsr = !!(await env.SUBS.head(`subs/${videoId}/.allow-any-asr`));
+    if (!canTranslate(srcDoc) && !(allowAnyAsr && srcDoc.track.kind === 'asr' && !/^zh/i.test(srcDoc.track.languageCode || ''))) {
+      continue;
+    }
 
     const lock = await env.SUBS.head(`subs/${videoId}/.translating`);
     if (lock && Date.now() - lock.uploaded.getTime() < 10 * 60 * 1000) continue; // 有人在翻
 
     await env.SUBS.put(`subs/${videoId}/.translating`, new Date().toISOString());
     try {
-      const r = await runPipeline(env, videoId, true, llmOverride);
+      const r = await runPipeline(env, videoId, true, llmOverride, allowAnyAsr);
       return { translated: videoId, status: r.status, scanned };
     } finally {
       await env.SUBS.delete(`subs/${videoId}/.translating`);
