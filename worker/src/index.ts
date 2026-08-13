@@ -32,8 +32,30 @@ const json = (data: unknown, status = 200): Response =>
     headers: { 'content-type': 'application/json; charset=utf-8', ...CORS },
   });
 
+// 背景執行翻譯並把結果寫進 R2 — 客戶端斷線後仍要跑完（waitUntil），
+// 否則長影片必定被「同步請求 5 分鐘斷線 → Worker 被砍」殺掉（實測 686 cues 的日文 ASR）
+async function runAndRecord(env: Env, videoId: string, force: boolean, allowAnyAsr: boolean): Promise<void> {
+  const startedAt = new Date().toISOString();
+  let record: Record<string, unknown>;
+  try {
+    const { status, body } = await runPipeline(env, videoId, force, undefined, allowAnyAsr);
+    record = { startedAt, finishedAt: new Date().toISOString(), status, ...body };
+  } catch (e) {
+    record = {
+      startedAt,
+      finishedAt: new Date().toISOString(),
+      status: 500,
+      ok: false,
+      error: e instanceof Error ? e.message : String(e),
+    };
+  }
+  await env.SUBS.put(`subs/${videoId}/last-run.json`, JSON.stringify(record, null, 2), {
+    httpMetadata: { contentType: 'application/json' },
+  });
+}
+
 export default {
-  async fetch(req: Request, env: Env): Promise<Response> {
+  async fetch(req: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
     const url = new URL(req.url);
     const path = url.pathname.replace(/\/+$/, '') || '/'; // 尾端斜線容錯
 
@@ -80,22 +102,31 @@ export default {
     const t = path.match(/^\/translate\/([A-Za-z0-9_-]{11})$/);
     if (req.method === 'POST' && t) {
       if (!authorized) return json({ ok: false, error: 'unauthorized' }, 403);
-      try {
-        const { status, body } = await runPipeline(
-          env,
-          t[1],
-          url.searchParams.get('force') === '1',
-          undefined,
-          url.searchParams.get('allowAnyAsr') === '1'
-        );
-        return json(body, status);
-      } catch (e) {
-        return json({ ok: false, error: e instanceof Error ? e.message : String(e) }, 500);
+      const videoId = t[1];
+      const force = url.searchParams.get('force') === '1';
+      const allowAnyAsr = url.searchParams.get('allowAnyAsr') === '1';
+      // 預設非同步（ack 即回，工作在背景跑完）；短影片想直接看結果可加 ?wait=1
+      if (url.searchParams.get('wait') === '1') {
+        try {
+          const { status, body } = await runPipeline(env, videoId, force, undefined, allowAnyAsr);
+          return json(body, status);
+        } catch (e) {
+          return json({ ok: false, error: e instanceof Error ? e.message : String(e) }, 500);
+        }
       }
+      ctx.waitUntil(runAndRecord(env, videoId, force, allowAnyAsr));
+      return json(
+        {
+          ok: true,
+          accepted: videoId,
+          note: '已在背景開始翻譯，結果請看 /subs/{videoId}/last-run.json（完成後才會出現/更新）',
+        },
+        202
+      );
     }
 
-    const FILES = ['source.json', 'sentences.json', 'glossary.json', 'bilingual.json', 'bilingual.srt', 'info.json'];
-    const m = path.match(/^\/subs\/([A-Za-z0-9_-]{11})\/([a-z.]+)$/);
+    const FILES = ['source.json', 'sentences.json', 'glossary.json', 'bilingual.json', 'bilingual.srt', 'info.json', 'last-run.json'];
+    const m = path.match(/^\/subs\/([A-Za-z0-9_-]{11})\/([a-z.-]+)$/);
     if (req.method === 'GET' && m && FILES.includes(m[2])) {
       const obj = await env.SUBS.get(`subs/${m[1]}/${m[2]}`);
       if (!obj) return json({ ok: false, error: 'not found' }, 404);
