@@ -81,7 +81,7 @@ curl "https://ytplayer.ai-apps.work/subs/<videoId>/bilingual.srt"
 | `GEMINI_API_KEY` | Secret | 翻譯模型（aistudio.google.com 取得） |
 | `GEMINI_MODEL` | Var（wrangler.jsonc） | 預設 `gemini-3.6-flash`（7 月實測有據）。**只能改 wrangler.jsonc**：git 部署會用它蓋掉 dashboard 的明文變數（Secret 不受影響）— 在 dashboard 改會被下次部署踩回來 |
 | `GEMINI_THINKING_BUDGET` | Var（選填） | text 路由 thinking token 上限，**預設 0（關）** — 翻譯是機械轉換不需推理，thinking 以輸出價計費（2026-08-13 帳單事故主因：Output 是 Input 的 3–4 倍全是思考）。看片路由不受此限（維持模型預設） |
-| `COST_NTD_PER_M` | Var（選填） | 儀表板費用估算費率 NT$/百萬 tokens，預設 30，對照帳單後調準 |
+| `COST_IN_NTD_PER_M` / `COST_OUT_NTD_PER_M` | Var（選填） | 儀表板雙費率估算，預設 47/280（= 3.5-flash 牌價 $1.5/$9 × 31 匯率）。舊單費率 `COST_NTD_PER_M` 設了會蓋過雙費率 |
 
 ## 本機開發
 
