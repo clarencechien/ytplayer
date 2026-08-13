@@ -437,6 +437,14 @@ function init(doc) {
   // 字卡（video 路由 kind=card）走獨立圖層；對白字幕帶與同步邏輯只吃 speech
   cardCues = all.filter(function (c) { return c.kind === "card"; });
   cues = all.filter(function (c) { return c.kind !== "card"; });
+  // 兜底 chaining：資料端沒 retime 過（無 end0）的舊片，載入時輕量延伸句尾
+  // （句間空隙 → 字幕早消失；資料端修正鈕在 /admin，見 docs/subtitle-timing.md）
+  if (!cues.some(function (c) { return c.end0 != null; })) {
+    for (var ci = 0; ci < cues.length; ci++) {
+      var nx = cues[ci + 1];
+      if (nx && nx.start - cues[ci].end > 0) cues[ci].end = Math.min(nx.start - 0.05, cues[ci].end + 2);
+    }
+  }
   document.getElementById("title").textContent = doc.meta && doc.meta.title || VID;
   document.getElementById("meta").textContent =
     (doc.meta && doc.meta.channel || "") + "・" + cues.length + " 句" +
@@ -693,7 +701,9 @@ function refresh() {
           ? Date.parse(j.updatedAt) - Date.parse(j.startedAt)
           : Date.now() - Date.parse(j.startedAt);
         return "<tr><td><a class='title' href='/watch/" + j.videoId + "' target='_blank' title='" + esc(j.title) + "'>" + esc(j.title) + "</a><br>" +
-          "<span class='hint'>" + j.videoId + "・<a href='/subs/" + j.videoId + "/status.json' target='_blank'>status</a></span></td>" +
+          "<span class='hint'>" + j.videoId + "・<a href='/subs/" + j.videoId + "/status.json' target='_blank'>status</a>" +
+          (j.stage === "done" ? "・<a href='#' onclick='return retime(\\"" + j.videoId + "\\")' title='重算顯示時間軸（chaining，零 LLM 費用、冪等可重按）'>⏱修時間</a>" : "") +
+          "</span></td>" +
           "<td>" + esc(j.route || "") + "</td>" +
           "<td class='" + stCls(j) + "'>" + esc(stTxt(j)) + "</td>" +
           "<td class='num'>" + (j.tokensUsed || 0).toLocaleString() + "</td>" +
@@ -707,6 +717,19 @@ function refresh() {
 }
 refresh();
 setInterval(refresh, 15000);
+
+// B 修正鈕：對已翻好的影片重算顯示時間軸（docs/subtitle-timing.md）— 零 LLM、冪等
+function retime(id) {
+  fetch("/retime/" + id, { method: "POST", headers: headers() })
+    .then(function (r) { return r.json(); })
+    .then(function (d) {
+      document.getElementById("jerr").textContent = d.ok
+        ? "⏱ " + id + "：已調整 " + d.changed + "/" + d.cueCount + " 句的顯示時間"
+        : "修時間失敗：" + (d.error || "");
+    })
+    .catch(function (e) { document.getElementById("jerr").textContent = String(e); });
+  return false;
+}
 
 var out = document.getElementById("out");
 document.getElementById("go").onclick = function () {

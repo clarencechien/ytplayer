@@ -28,6 +28,7 @@ import {
   type BilingualCue,
   type PipelineStats,
 } from './pipeline';
+import { retimeCues } from './retime';
 import {
   initWatchState,
   nextSegment,
@@ -383,6 +384,7 @@ async function assembleVideoStep(env: JobEnv, videoId: string, st: JobStatus): P
   }
   const cues = sanitizeWatchCues(all);
   if (cues.length === 0) throw new Error('看片結果 0 cues，無法組裝');
+  retimeCues(cues); // 顯示鏈接（speech only，字卡不動）
 
   const warnings = [...st.warnings];
   if (w.skipped.length > 0) warnings.push(`跳過 ${w.skipped.length} 個毒段（起點秒數：${w.skipped.join(', ')}）`);
@@ -734,6 +736,7 @@ async function assembleStep(env: JobEnv, videoId: string): Promise<StepResult> {
 
   const sentences = sentencesDoc.sentences;
   const { cues, untranslated, bannedHits, extendedHits } = assembleBilingual(sentences, src.cues, byId);
+  retimeCues(cues); // B 治標內建：顯示鏈接 + 最短時長（docs/subtitle-timing.md）
   if (untranslated > 0) warnings.push(`${untranslated} 句翻譯失敗，以原文代替（標 untranslated）`);
   if (bannedHits.length > 0) warnings.push(`禁用詞殘留：${bannedHits.join('、')}`);
   const hints = extendedHits.length > 0 ? [`疑似中國用語（OpenCC 參考，僅提示）：${extendedHits.slice(0, 20).join('、')}`] : [];

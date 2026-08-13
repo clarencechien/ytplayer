@@ -14,7 +14,8 @@
 
 import { validateIngest } from './validate';
 import { migrateKvs } from './migrate';
-import { listVideos, routeSource } from './pipeline';
+import { retimeCues, type RetimeCue } from './retime';
+import { listVideos, routeSource, toSrt } from './pipeline';
 import { handleJob, watchdog, readDailyBudget, type JobMsg, type MsgLike, type WatchRequest } from './jobs';
 import { watchPage, indexPage, adminPage } from './player';
 
@@ -214,6 +215,30 @@ export default {
         { ok: true, accepted: videoId, route: 'video', note: '看片任務已排入，進度看 /subs/{videoId}/status.json' },
         202
       );
+    }
+
+    // B 修正鈕（docs/subtitle-timing.md）：對已翻好的影片重算顯示時間軸 —
+    // 零 LLM、不重跑翻譯，冪等可重按。v1（en）與 v2（orig）皆可修。
+    const rt = path.match(/^\/retime\/([A-Za-z0-9_-]{11})$/);
+    if (req.method === 'POST' && rt) {
+      if (!authorized) return json({ ok: false, error: 'unauthorized' }, 403);
+      const videoId = rt[1];
+      const obj = await env.SUBS.get(`subs/${videoId}/bilingual.json`);
+      if (!obj) return json({ ok: false, error: 'bilingual.json 不存在（還沒翻好）' }, 404);
+      const doc = JSON.parse(await obj.text()) as Record<string, unknown> & {
+        cues: Array<RetimeCue & { en?: string; orig?: string }>;
+      };
+      const changed = retimeCues(doc.cues);
+      doc.retimedAt = new Date().toISOString();
+      await env.SUBS.put(`subs/${videoId}/bilingual.json`, JSON.stringify(doc), {
+        httpMetadata: { contentType: 'application/json' },
+      });
+      await env.SUBS.put(
+        `subs/${videoId}/bilingual.srt`,
+        toSrt(doc.cues.map((c) => ({ start: c.start, end: c.end, en: c.orig ?? c.en ?? '', zh: (c as { zh?: string }).zh ?? '' }))),
+        { httpMetadata: { contentType: 'text/plain; charset=utf-8' } }
+      );
+      return json({ ok: true, videoId, changed, cueCount: doc.cues.length });
     }
 
     // M4 一次性遷移：kvsplayer R2（kvs-krsub）→ schema v2。純 R2 拷貝零 LLM，可重跑。

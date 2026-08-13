@@ -19,7 +19,19 @@ export function normalizeJson3(body) {
       .replace(/\s+/g, ' ')
       .trim();
     if (!text) continue;
-    cues.push({ start: Math.round(ev.tStartMs) / 1000, dur: Math.round(ev.dDurationMs) / 1000, text });
+    const cue = { start: Math.round(ev.tStartMs) / 1000, dur: Math.round(ev.dDurationMs) / 1000, text };
+    // ASR 逐詞時間（tOffsetMs，相對 cue start）— 詞級斷句的原料（docs/subtitle-timing.md A）。
+    // 人工軌通常單 seg 無 offset，不帶欄位（payload 不變胖）
+    if (ev.segs.length > 1) {
+      const segs = [];
+      for (const s of ev.segs) {
+        const w = typeof s?.utf8 === 'string' ? s.utf8.replace(/\s+/g, ' ').trim() : '';
+        if (!w) continue;
+        segs.push([Math.round(Number(s.tOffsetMs) || 0) / 1000, w]);
+      }
+      if (segs.length > 1) cue.segs = segs;
+    }
+    cues.push(cue);
   }
   cues.sort((a, b) => a.start - b.start || a.dur - b.dur);
   return cues;
