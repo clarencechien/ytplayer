@@ -21,14 +21,18 @@ describe('geminiGenerate 重試策略', () => {
     expect(calls).toBe(2);
   });
 
-  it('其他 400（如參數錯誤）不重試，直接丟', async () => {
+  it('其他 400：先拿掉 thinkingConfig 探一次（有些模型拒收 budget），仍 400 才丟', async () => {
     let calls = 0;
-    vi.stubGlobal('fetch', async () => {
+    const bodies: string[] = [];
+    vi.stubGlobal('fetch', async (_url: string, init: { body: string }) => {
       calls++;
+      bodies.push(init.body);
       return new Response(JSON.stringify({ error: { code: 400, message: 'Invalid argument: contents' } }), { status: 400 });
     });
     await expect(geminiGenerate('key', 'model', 'prompt')).rejects.toThrow('400');
-    expect(calls).toBe(1);
+    expect(calls).toBe(2);
+    expect(bodies[0]).toContain('thinkingConfig'); // 第一發帶 budget（預設 128）
+    expect(bodies[1]).not.toContain('thinkingConfig'); // 探測發不帶
   });
 
   it('連續 location 400 到達上限後丟錯（不無限重試）', { timeout: 15000 }, async () => {

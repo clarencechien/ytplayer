@@ -4,9 +4,11 @@
 // 常會走到支援的出口，實測有效。其餘錯誤直接丟。
 //
 // thinking：Gemini 2.5+ 預設開推理，思考 token 以「輸出價」計費。翻譯/修稿是
-// 機械性 JSON 轉換不需要推理 — 預設 thinkingBudget=0（2026-08-13 帳單事故：
-// AI Studio 用量圖 Output 是 Input 的 3–4 倍，全是 thinking）。若模型拒絕
-// budget 0（400 提到 thinking），自動退回不帶 thinkingConfig 再試。
+// 機械性 JSON 轉換不需要推理 — 預設 thinkingBudget=128（2026-08-13 帳單事故：
+// AI Studio 用量圖 Output 是 Input 的 3–4 倍，全是 thinking）。
+// 為什麼是 128 不是 0：實測 3.6-flash 拒收 0（400 invalid argument）但接受 128
+// 且實際 thoughts=0；3.5-flash 兩者皆可。128 是兩者通吃的「實質關閉」。
+// 模型仍拒絕時（400），自動退回不帶 thinkingConfig 再試一次。
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
@@ -26,7 +28,7 @@ export async function geminiGenerate(
   model: string,
   prompt: string,
   onUsage?: (u: LlmUsage) => void,
-  thinkingBudget: number | null = 0
+  thinkingBudget: number | null = 128
 ): Promise<string> {
   const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`;
   let budget = thinkingBudget;
@@ -68,8 +70,9 @@ export async function geminiGenerate(
       return text;
     }
     const body = (await res.text()).slice(0, 300);
-    // 模型不接受 thinkingBudget 設定 → 拿掉再試（不計入重試次數上限的消耗也無妨，仍走同一計數）
-    if (res.status === 400 && budget != null && /thinking/i.test(body)) {
+    // 模型不接受 thinkingBudget 設定 → 拿掉再試（Google 的 400 訊息很泛，
+    // 「invalid argument」也視為此類；若真是別的問題，重試同樣會 400 再正常拋出）
+    if (res.status === 400 && budget != null && /thinking|invalid argument/i.test(body)) {
       budget = null;
       continue;
     }

@@ -181,7 +181,7 @@ function makeStepLlm(
 ): LlmFn {
   model = model || env.GEMINI_MODEL || 'gemini-3.6-flash';
   // 翻譯/修稿是機械性 JSON 轉換，thinking 預設關（0）— 它以輸出價計費，實測是帳單大宗
-  const thinkingBudget = env.GEMINI_THINKING_BUDGET != null ? Number(env.GEMINI_THINKING_BUDGET) : 0;
+  const thinkingBudget = env.GEMINI_THINKING_BUDGET != null ? Number(env.GEMINI_THINKING_BUDGET) : 128;
   return async (prompt) => {
     if (++meter.calls > maxCalls) throw new Error(`單步 LLM 呼叫超過上限 ${maxCalls} 次，中止（防重試失控）`);
     if (llmOverride) return llmOverride(prompt);
@@ -195,7 +195,7 @@ function makeStepLlm(
         meter.prompt += u.prompt;
         meter.thoughts += u.thoughts;
       },
-      Number.isFinite(thinkingBudget) ? thinkingBudget : 0
+      Number.isFinite(thinkingBudget) ? thinkingBudget : 128
     );
   };
 }
