@@ -255,8 +255,14 @@ async function planVideoStep(env: JobEnv, videoId: string, force: boolean): Prom
     }
   }
 
-  const parts = await env.SUBS.list({ prefix: `subs/${videoId}/parts/` });
-  for (const o of parts.objects) await env.SUBS.delete(o.key);
+  // token 計數跨輪累計（同 planStep：只有人為動作允許歸零）— 看片路線更貴，這層更要緊
+  const prev = await jsonGet<JobStatus>(env, statusKey(videoId));
+  const carry = prev && !force && prev.stage !== 'done' ? prev : undefined;
+  const resume = !!carry && carry.sourceUploaded === sourceUploaded && !!carry.watch;
+  if (!resume) {
+    const parts = await env.SUBS.list({ prefix: `subs/${videoId}/parts/` });
+    for (const o of parts.objects) await env.SUBS.delete(o.key);
+  }
 
   // 片長：使用者提供優先（可靠）；否則 countTokens 探測 + open 模式（掃到片尾偵測為止）
   let duration_s: number;
@@ -264,6 +270,9 @@ async function planVideoStep(env: JobEnv, videoId: string, force: boolean): Prom
   if (req.durationMin && req.durationMin > 0) {
     duration_s = Math.round(req.durationMin * 60);
     open = false;
+  } else if (resume) {
+    duration_s = carry!.watch!.duration_s;
+    open = carry!.watch!.open;
   } else {
     if (!env.GEMINI_API_KEY) return { status: 500, body: { ok: false, error: '未設定 GEMINI_API_KEY secret' } };
     duration_s = await probeDuration(env.GEMINI_API_KEY, env.GEMINI_MODEL || 'gemini-3.5-flash', videoId);
@@ -280,12 +289,13 @@ async function planVideoStep(env: JobEnv, videoId: string, force: boolean): Prom
     route: 'video',
     repairBatches: 0,
     translateBatches: null,
-    tokensUsed: 0,
-    llmCalls: 0,
-    retries: 0,
+    tokensUsed: carry?.tokensUsed ?? 0,
+    llmCalls: carry?.llmCalls ?? 0,
+    retries: carry?.retries ?? 0,
     asrRepaired: 0,
     warnings: [],
-    watch: initWatchState(duration_s, open),
+    // resume 時掃描進度接續（parts 保留、covered_s 續掃，已看過的段不重付）
+    watch: resume ? carry!.watch! : initWatchState(duration_s, open),
     title,
   };
   await writeStatus(env, st);
@@ -469,9 +479,19 @@ async function planStep(env: JobEnv, videoId: string, force: boolean): Promise<S
     }
   }
 
-  // 開新一輪：舊 checkpoint 一律清掉（force 重跑、或 source 換版）
-  const parts = await env.SUBS.list({ prefix: `subs/${videoId}/parts/` });
-  for (const o of parts.objects) await env.SUBS.delete(o.key);
+  // 保險絲完整性：上一輪還沒 done 就被重排（= 看門狗救斷鏈）時，token 計數必須跨輪累計 —
+  // 否則「步驟反覆無聲死亡 → 看門狗每次重排歸零計數」會繞過每片上限，重演燒錢迴圈。
+  // 人為動作（force、或上一輪已 done 的重新 ingest）才允許歸零。
+  const prev = await jsonGet<JobStatus>(env, statusKey(videoId));
+  const carry = prev && !force && prev.stage !== 'done' ? prev : undefined;
+  const resume = !!carry && carry.sourceUploaded === sourceUploaded;
+
+  // checkpoint：同版 source 的斷鏈重排 = 真 resume（parts 保留，鏈上冪等跳步不重付）；
+  // force 或 source 換版才全清重來
+  if (!resume) {
+    const parts = await env.SUBS.list({ prefix: `subs/${videoId}/parts/` });
+    for (const o of parts.objects) await env.SUBS.delete(o.key);
+  }
 
   const needRepair = src.track.kind === 'asr';
   const sentences = segmentCues(src.cues);
@@ -487,9 +507,9 @@ async function planStep(env: JobEnv, videoId: string, force: boolean): Promise<S
     route: 'text',
     repairBatches: needRepair ? Math.ceil(chunkCount / CHUNKS_PER_BATCH) : 0,
     translateBatches: needRepair ? null : Math.ceil(chunkCount / CHUNKS_PER_BATCH),
-    tokensUsed: 0,
-    llmCalls: 0,
-    retries: 0,
+    tokensUsed: carry?.tokensUsed ?? 0,
+    llmCalls: carry?.llmCalls ?? 0,
+    retries: carry?.retries ?? 0,
     asrRepaired: 0,
     warnings: [],
   };

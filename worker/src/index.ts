@@ -15,7 +15,7 @@
 import { validateIngest } from './validate';
 import { migrateKvs } from './migrate';
 import { listVideos, routeSource } from './pipeline';
-import { handleJob, watchdog, type JobMsg, type MsgLike, type WatchRequest } from './jobs';
+import { handleJob, watchdog, readDailyBudget, type JobMsg, type MsgLike, type WatchRequest } from './jobs';
 import { watchPage, indexPage, adminPage } from './player';
 
 export interface Env {
@@ -70,7 +70,15 @@ export default {
       new Response(body, { headers: { 'content-type': 'text/html; charset=utf-8', ...BASE } });
 
     if (req.method === 'GET' && path === '/health') {
-      return json({ service: 'ytplayer', ok: true, ingestKeyConfigured: keyConfigured });
+      // 今日花費隨時可見（成本事故的教訓：看不見的花費才是危險的花費）
+      const budget = await readDailyBudget(env);
+      const dailyCap = Number(env.DAILY_TOKEN_CAP) > 0 ? Number(env.DAILY_TOKEN_CAP) : 2_000_000;
+      return json({
+        service: 'ytplayer',
+        ok: true,
+        ingestKeyConfigured: keyConfigured,
+        today: { tokens: budget.tokens, llmCalls: budget.calls, dailyCapTokens: dailyCap },
+      });
     }
     // 陷阱提醒：robots.txt 不能 Disallow — 擋了爬取，爬蟲就看不到 noindex 標頭，
     // URL 仍會以「無內容連結」形式進索引。正確組合 = 允許抓 + 全站 noindex。
