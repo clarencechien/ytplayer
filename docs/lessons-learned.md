@@ -33,6 +33,11 @@
   secret 要設在 Worker 的 **Variables and Secrets**（不是 Builds 的 environment variables — 實測設錯過，health 的 `ingestKeyConfigured` 是照妖鏡）
 - R2 bucket 建立：deploy command 先 `wrangler r2 bucket create ... || true` best-effort，失敗再手動一次
 - 認證模型：**讀公開、寫入要 key**（字幕非敏感）— player 頁因此不用帶 key，瀏覽器可直接看輸出
+- **執行環境的硬限制（2026-08-13 隔離測試）**：`fetch` handler（含 `ctx.waitUntil`）**跑不了本專案的 pipeline**——
+  瞬間失敗的工作 91ms 就寫下紀錄（機制正常），但只要是真實翻譯工作量就被中止，連 150 cues 的小切片也一樣；
+  同時期 **cron（scheduled handler）成功完成 520 句**。結論：**長工作只能走 scheduled handler**。
+  次生陷阱：cron 的 `.translating` 鎖在 `finally` 裡刪除，Worker 被外部中止時 `finally` 不執行 → 鎖殘留 10 分鐘 →
+  安靜的重試迴圈。長工作要**分段可續跑**（`sentences.json` 是天然檢查點）+ 開工即寫進度，否則只能靠猜
 - 非同步策略：**cron（*/5）掃 R2 佇列**勝過 long-request（kvsplayer 的教訓）與 ext fire-and-forget（popup 一關 fetch 就死、Worker 被取消）。
   規則：bilingual 缺少或比 source 舊 → 翻；`.translating` 鎖檔防重疊（10 分鐘 stale）；重新 ingest 即自動重翻；改 promptVersion 需手動 `force=1`（避免版本一 bump 全庫自動重燒）
 - **Gemini API「User location is not supported」400 是間歇性的**：Worker 出口 colo 會變（台灣流量常經香港，該區不被支援），
