@@ -27,6 +27,7 @@ export interface Env {
   GEMINI_API_KEY?: string;
   GEMINI_MODEL?: string;
   GEMINI_MEDIA_RES?: string;
+  GEMINI_THINKING_BUDGET?: string;
   VIDEO_TOKEN_CAP?: string;
   WATCH_TOKEN_CAP?: string;
   DAILY_TOKEN_CAP?: string;
@@ -139,6 +140,7 @@ export default {
           failReason: st.failReason,
           tokensUsed: st.tokensUsed ?? 0,
           llmCalls: st.llmCalls ?? 0,
+          thoughtTokens: st.thoughtTokens ?? 0,
           estNTD: Math.round((((st.tokensUsed as number) ?? 0) / 1_000_000) * rate * 100) / 100,
           startedAt: st.startedAt,
           updatedAt: st.updatedAt,
