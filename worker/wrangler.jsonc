@@ -5,7 +5,10 @@
   "compatibility_date": "2026-07-01",
   "observability": { "enabled": true },
   "vars": { "GEMINI_MODEL": "gemini-3.5-flash" },
-  "triggers": { "crons": ["*/5 * * * *"] },
+  // ⛔ cron 暫停（2026-08-13 成本事故）：外部中止的 run 不會寫 last-run 也不會清鎖，
+  // 形成「每輪重挑同一支 → 燒 API → 被砍 → 再來」的安靜迴圈。
+  // 修好「分段可續跑 + 嘗試次數上限 + 開工即寫 running」（見 docs/asr-language-experiment.md §4.3）之前不得重開。
+  "triggers": { "crons": [] },
   "r2_buckets": [
     { "binding": "SUBS", "bucket_name": "ytplayer-subs" }
   ]
