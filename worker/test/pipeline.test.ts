@@ -202,6 +202,14 @@ describe('translateChunk', () => {
 describe('repairChunk', () => {
   const chunk = { before: [], target: [sent(0, 'when your dealing [music] with rockets'), sent(1, 'ok.')], after: [] };
 
+  it('prompt 帶入原文語言，且明確禁止翻譯成其他語言（日文 ASR 的關鍵防線）', async () => {
+    let seen = '';
+    await repairChunk(async (p) => { seen = p; return '[{"id":0,"en":"a"},{"id":1,"en":"b"}]'; }, meta, chunk, 'ja');
+    expect(seen).toContain('ja');
+    expect(seen).toContain('絕對不要翻譯成其他語言');
+    expect(seen).not.toContain('正確的英文');
+  });
+
   it('修稿成功：取代原文', async () => {
     const llm = async () => '[{"id":0,"en":"When you\'re dealing with rockets."},{"id":1,"en":"OK."}]';
     const r = await repairChunk(llm, meta, chunk);
