@@ -103,8 +103,9 @@ fail-fast 檢查、譯註系統、player template。個人專案沒有 registry�
 ## 6. 決策（人工填寫）
 
 ```
-決策：____（A / B / C）
-日期：____
-理由：____
-若 A：預計時程與驗收方式：____
+決策：A（完全合併，ytplayer 為基底，完成後關閉 kvsplayer）
+日期：2026-08-13
+理由：Workers Paid 已付（判準 #4 解除）；ASR 實驗開放 Tier 3 各語言後兩題匯流成同一個路由表
+      （判準 #2 實質成立）；player UX 重複勞動已實際發生（判準 #3）。
+若 A：預計時程與驗收方式：見 docs/migration.md（M0–M5 分階段 gate）。
 ```
