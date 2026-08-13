@@ -511,9 +511,29 @@ export async function translateNextPending(
     if (lock && Date.now() - lock.uploaded.getTime() < 10 * 60 * 1000) continue; // 有人在翻
 
     await env.SUBS.put(`subs/${videoId}/.translating`, new Date().toISOString());
+    const startedAt = new Date().toISOString();
     try {
-      const r = await runPipeline(env, videoId, true, llmOverride, allowAnyAsr);
-      return { translated: videoId, status: r.status, scanned };
+      // cron 的成敗也要落地 —— 否則 cron 失敗是完全看不見的（實測踩過：只能靠猜）
+      let record: Record<string, unknown>;
+      let status = 500;
+      try {
+        const r = await runPipeline(env, videoId, true, llmOverride, allowAnyAsr);
+        status = r.status;
+        record = { via: 'cron', startedAt, finishedAt: new Date().toISOString(), status, ...r.body };
+      } catch (e) {
+        record = {
+          via: 'cron',
+          startedAt,
+          finishedAt: new Date().toISOString(),
+          status,
+          ok: false,
+          error: e instanceof Error ? e.message : String(e),
+        };
+      }
+      await env.SUBS.put(`subs/${videoId}/last-run.json`, JSON.stringify(record, null, 2), {
+        httpMetadata: { contentType: 'application/json' },
+      });
+      return { translated: videoId, status, scanned };
     } finally {
       await env.SUBS.delete(`subs/${videoId}/.translating`);
     }

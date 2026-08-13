@@ -36,6 +36,7 @@ Caption track 有四個層級，每層是不同的題目（詳見 [docs/handoff-
 MVP 完整可用：ingest → （英文 ASR 修稿）→ glossary → 分塊翻譯 → deterministic 驗證/fail-fast → 自動譯註 → player。
 prompt 目前 **v4**；worker 測試 63 個。品質防線與所有實證教訓見 **[docs/lessons-learned.md](docs/lessons-learned.md)**。
 kvsplayer 合併與否的分析（架構差異 / ADR / go–no-go）見 **[docs/kvsplayer-merge-todo.md](docs/kvsplayer-merge-todo.md)**。
+非英文 ASR 可信度實測見 **[docs/asr-language-experiment.md](docs/asr-language-experiment.md)**。
 
 ### Player 操作（與 YouTube 慣例一致）
 
