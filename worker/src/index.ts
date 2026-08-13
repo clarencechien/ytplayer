@@ -61,9 +61,13 @@ export default {
 
     if (req.method === 'OPTIONS') return new Response(null, { status: 204, headers: CORS });
 
-    // 讀取公開（字幕非敏感資料，player 頁也要直接讀）；寫入／翻譯才要 key
+    // 單片字幕（/watch、/subs）維持公開：videoId 本來就是 YouTube 公開資訊，連結才好分享。
+    // 但「影片清單」等於觀看紀錄，要 key —— 瀏覽器沒法帶 header，故同時接受 ?key=
     const keyConfigured = typeof env.INGEST_KEY === 'string' && env.INGEST_KEY.length > 0;
-    const authorized = !keyConfigured || req.headers.get('x-ingest-key') === env.INGEST_KEY;
+    const authorized =
+      !keyConfigured ||
+      req.headers.get('x-ingest-key') === env.INGEST_KEY ||
+      url.searchParams.get('key') === env.INGEST_KEY;
     const warning = keyConfigured ? undefined : '尚未設定 INGEST_KEY secret，任何人都可寫入';
 
     const html = (body: string) =>
@@ -73,7 +77,11 @@ export default {
       return json({ service: 'ytplayer', ok: true, ingestKeyConfigured: keyConfigured });
     }
     if (req.method === 'GET' && path === '/') return html(indexPage());
-    if (req.method === 'GET' && path === '/videos.json') return json(await listVideos(env));
+    // 清單 = 觀看紀錄，不對外
+    if (req.method === 'GET' && path === '/videos.json') {
+      if (!authorized) return json({ ok: false, error: 'unauthorized' }, 403);
+      return json(await listVideos(env));
+    }
     const w = path.match(/^\/watch\/([A-Za-z0-9_-]{11})$/);
     if (req.method === 'GET' && w) return html(watchPage(w[1]));
 

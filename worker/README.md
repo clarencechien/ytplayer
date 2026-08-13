@@ -36,13 +36,18 @@
 |---|---|---|---|
 | GET | `/` | 公開 | 影片清單頁（player 入口） |
 | GET | `/watch/{videoId}` | 公開 | Player 頁（iframe + 雙語字幕層 + 逐句稿） |
-| GET | `/videos.json` | 公開 | 清單資料 |
+| GET | `/videos.json` | **key** | 清單資料（等於觀看紀錄，不對外） |
 | GET | `/subs/{videoId}/{file}` | 公開 | `source/sentences/glossary/bilingual/info.json`、`bilingual.srt` |
 | GET | `/health` | 公開 | 狀態（`ingestKeyConfigured` 要是 `true`） |
 | POST | `/ingest` | key | 收 ext payload，存 `subs/{videoId}/source.json` |
 | POST | `/translate/{videoId}` | key | 手動觸發翻譯，**預設非同步**（202 ack，結果寫進 `last-run.json`）。`?force=1` 忽略 cache、`?wait=1` 同步等結果（僅適合短片） |
 
-Cron（`*/5`）自動掃 R2：Tier 2 且 bilingual 缺少/過期 → 翻譯，一次一支。
+Cron（`*/5`）自動掃 R2：可翻譯的軌且 bilingual 缺少/過期 → 翻譯，一次一支。
+
+認證分層：**寫入**（ingest／translate）一律要 key；**影片清單**要 key（等於觀看紀錄）；
+**單片**（`/watch/{id}`、`/subs/{id}/*`）維持公開 —— videoId 本來就是 YouTube 公開資訊，連結才好分享。
+瀏覽器帶不了 header，故清單同時接受 `?key=`：首次用 `https://ytplayer.ai-apps.work/?key=你的KEY`
+開啟，頁面會存進 localStorage 並把 key 從網址清掉，之後直接開 `/` 即可。
 
 ## 自訂網域
 
