@@ -29,6 +29,7 @@ export interface Env {
   VIDEO_TOKEN_CAP?: string;
   WATCH_TOKEN_CAP?: string;
   DAILY_TOKEN_CAP?: string;
+  COST_NTD_PER_M?: string; // 費用估算費率：NT$/百萬 tokens（預設 30，對照帳單後調準）
   ALLOWED_EMAIL?: string; // Cloudflare Access 使用者白名單（/admin 的人用認證；程式仍用 key）
 }
 
@@ -99,6 +100,65 @@ export default {
     if (req.method === 'GET' && path === '/videos.json') {
       if (!authorized) return json({ ok: false, error: 'unauthorized' }, 403);
       return json(await listVideos(env));
+    }
+    // 營運儀表板資料（admin 頁用）：所有 job 狀態 + 今日花費 + 費用估算。一頁看完，不通靈。
+    if (req.method === 'GET' && path === '/jobs.json') {
+      if (!authorized) return json({ ok: false, error: 'unauthorized' }, 403);
+      const rate = Number(env.COST_NTD_PER_M) > 0 ? Number(env.COST_NTD_PER_M) : 30; // NT$/百萬 tokens（估算，var 可調）
+      const budget = await readDailyBudget(env);
+      const dailyCap = Number(env.DAILY_TOKEN_CAP) > 0 ? Number(env.DAILY_TOKEN_CAP) : 2_000_000;
+
+      const prefixes: string[] = [];
+      let cursor: string | undefined;
+      do {
+        const res = await env.SUBS.list({ prefix: 'subs/', delimiter: '/', cursor });
+        prefixes.push(...(res.delimitedPrefixes ?? []));
+        cursor = res.truncated ? res.cursor : undefined;
+      } while (cursor);
+
+      const jobs: Array<Record<string, unknown>> = [];
+      for (const p of prefixes) {
+        const videoId = p.slice('subs/'.length).replace(/\/$/, '');
+        if (!/^[A-Za-z0-9_-]{11}$/.test(videoId)) continue;
+        const stObj = await env.SUBS.get(`subs/${videoId}/status.json`);
+        if (!stObj) continue;
+        const st = JSON.parse(await stObj.text()) as Record<string, unknown> & { title?: string; tokensUsed?: number };
+        let title = st.title;
+        if (!title) {
+          const info = await env.SUBS.get(`subs/${videoId}/info.json`);
+          if (info) title = (JSON.parse(await info.text()) as { title?: string }).title;
+        }
+        jobs.push({
+          videoId,
+          title: title ?? videoId,
+          route: st.route,
+          stage: st.stage,
+          step: st.step,
+          failed: st.failed ?? false,
+          failReason: st.failReason,
+          tokensUsed: st.tokensUsed ?? 0,
+          llmCalls: st.llmCalls ?? 0,
+          estNTD: Math.round((((st.tokensUsed as number) ?? 0) / 1_000_000) * rate * 100) / 100,
+          startedAt: st.startedAt,
+          updatedAt: st.updatedAt,
+          warningCount: Array.isArray(st.warnings) ? st.warnings.length : 0,
+        });
+      }
+      // 進行中在最上、失敗次之、完成的按時間新到舊
+      const rank = (j: Record<string, unknown>) => (j.failed ? 1 : j.stage === 'done' ? 2 : 0);
+      jobs.sort((a, b) => rank(a) - rank(b) || String(b.updatedAt).localeCompare(String(a.updatedAt)));
+
+      return json({
+        ok: true,
+        rateNTDPerM: rate,
+        today: {
+          tokens: budget.tokens,
+          llmCalls: budget.calls,
+          dailyCapTokens: dailyCap,
+          estNTD: Math.round((budget.tokens / 1_000_000) * rate * 100) / 100,
+        },
+        jobs,
+      });
     }
     const w = path.match(/^\/watch\/([A-Za-z0-9_-]{11})$/);
     if (req.method === 'GET' && w) return html(watchPage(w[1]));

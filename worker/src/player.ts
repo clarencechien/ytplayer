@@ -591,8 +591,10 @@ fetch("/videos.json", { headers: savedKey ? { "x-ingest-key": savedKey } : {} })
 </html>`;
 }
 
-// 看片路線（video route）人用入口：貼連結 → POST /watch-job/{id}。
-// 認證：頁面本身建議用 Cloudflare Access 蓋住 /admin；API 呼叫帶 localStorage 的 key 亦可。
+// /admin — 一頁式營運儀表板 + 看片任務入口。
+// 上：今日花費（/health 同源資料）＋所有 job 狀態（/jobs.json，15 秒自動刷新）。
+// 下：看片任務表單（video 路由）。認證：頁面建議用 Cloudflare Access 蓋 /admin；
+// API 帶 localStorage 的 key（首次用 /?key=… 開清單頁即已存入）。
 export function adminPage(): string {
   return `<!DOCTYPE html>
 <html lang="zh-Hant-TW">
@@ -600,27 +602,48 @@ export function adminPage(): string {
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="robots" content="noindex">
-<title>ytplayer — 看片任務</title>
+<title>ytplayer — 儀表板</title>
 <style>
   :root { color-scheme: dark; }
-  body { margin: 0; background: #0f0f13; color: #eee; font: 15px/1.6 system-ui, "Noto Sans TC", sans-serif; }
-  main { max-width: 640px; margin: 40px auto; padding: 0 16px; }
-  h1 { font-size: 20px; } .hint { color: #999; font-size: 13px; }
-  label { display: block; margin: 14px 0 4px; color: #bbb; }
+  body { margin: 0; background: #0f0f13; color: #eee; font: 14px/1.6 system-ui, "Noto Sans TC", sans-serif; }
+  main { max-width: 860px; margin: 24px auto 60px; padding: 0 16px; }
+  h1 { font-size: 19px; margin: 18px 0 6px; } h2 { font-size: 15px; margin: 26px 0 8px; color: #ccc; }
+  .hint { color: #999; font-size: 12.5px; }
+  .strip { display: flex; gap: 10px; flex-wrap: wrap; margin: 14px 0; }
+  .stat { background: #1a1a22; border: 1px solid #2a2a35; border-radius: 10px; padding: 10px 16px; min-width: 130px; }
+  .stat .v { font-size: 20px; font-weight: 700; color: #ffd54a; font-variant-numeric: tabular-nums; }
+  .stat .k { font-size: 11.5px; color: #999; }
+  table { width: 100%; border-collapse: collapse; font-size: 12.5px; }
+  th, td { text-align: left; padding: 6px 8px; border-bottom: 1px solid #23232d; vertical-align: top; }
+  th { color: #888; font-weight: 500; font-size: 11.5px; }
+  td.num { font-variant-numeric: tabular-nums; white-space: nowrap; }
+  .st-run { color: #6cf; } .st-done { color: #7c5; } .st-fail { color: #f66; } .st-pause { color: #fa5; }
+  .title { max-width: 300px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; display: inline-block; vertical-align: bottom; }
+  a { color: #59f; text-decoration: none; } a:hover { text-decoration: underline; }
+  label { display: block; margin: 12px 0 4px; color: #bbb; font-size: 13px; }
   input { width: 100%; box-sizing: border-box; background: #1a1a22; color: #eee; border: 1px solid #333;
-          border-radius: 8px; padding: 10px 12px; font-size: 15px; }
-  button { margin-top: 18px; background: #ffd54a; color: #000; border: 0; border-radius: 8px;
-           padding: 10px 22px; font-size: 15px; font-weight: 700; cursor: pointer; }
-  #out { margin-top: 18px; white-space: pre-wrap; font-family: ui-monospace, monospace; font-size: 13px; }
+          border-radius: 8px; padding: 9px 12px; font-size: 14px; }
+  button { margin-top: 14px; background: #ffd54a; color: #000; border: 0; border-radius: 8px;
+           padding: 9px 20px; font-size: 14px; font-weight: 700; cursor: pointer; }
+  #out { margin-top: 14px; white-space: pre-wrap; font-family: ui-monospace, monospace; font-size: 12.5px; }
   .ok { color: #7c5; } .err { color: #f66; }
-  a { color: #59f; }
+  #jerr { color: #f66; font-size: 13px; margin: 10px 0; }
 </style>
 </head>
 <body>
 <main>
-  <h1>🎬 看片任務（Gemini 直接看片）</h1>
-  <p class="hint">給「字卡型韓綜」與「完全沒有 CC」的影片。成本約為純文字翻譯的 30 倍
-  （MEDIUM 解析度 ≈ 300 token/秒），一般有原文 CC 的影片請照常用 ext ingest。</p>
+  <h1>📊 ytplayer 儀表板</h1>
+  <div class="strip" id="strip"><div class="stat"><div class="v">…</div><div class="k">載入中</div></div></div>
+  <div id="jerr"></div>
+  <h2>任務狀態 <span class="hint">（15 秒自動刷新・費用為估算值，費率 <span id="rate">?</span> NT$/M tokens，var COST_NTD_PER_M 可調）</span></h2>
+  <table>
+    <thead><tr><th>影片</th><th>路由</th><th>狀態</th><th>tokens</th><th>est NT$</th><th>耗時</th><th>更新於</th></tr></thead>
+    <tbody id="rows"><tr><td colspan="7" class="hint">載入中…</td></tr></tbody>
+  </table>
+
+  <h2>🎬 看片任務（Gemini 直接看片）</h2>
+  <p class="hint">給「字卡型韓綜」與「完全沒有 CC」的影片。成本約純文字翻譯 30 倍（MEDIUM ≈ 300 tok/秒），
+  一般有原文 CC 的影片請照常用 ext ingest。</p>
   <label>YouTube 連結或影片 ID</label>
   <input id="url" placeholder="https://www.youtube.com/watch?v=… 或 11 碼 ID">
   <label>片長（分鐘）— 建議填，比自動探測可靠</label>
@@ -631,6 +654,60 @@ export function adminPage(): string {
   <div id="out"></div>
 </main>
 <script>
+var KEY = localStorage.getItem("ytplayer-key");
+function headers() {
+  var h = { "content-type": "application/json" };
+  if (KEY) h["x-ingest-key"] = KEY;
+  return h;
+}
+function fmtDur(ms) {
+  if (!(ms > 0)) return "—";
+  var m = Math.floor(ms / 60000), s = Math.round(ms % 60000 / 1000);
+  return m ? m + "分" + (s ? s + "秒" : "") : s + "秒";
+}
+function esc(s) { var d = document.createElement("span"); d.textContent = String(s == null ? "" : s); return d.innerHTML; }
+function stCls(j) { return j.failed ? "st-fail" : j.stage === "done" ? "st-done" : j.stage === "paused" ? "st-pause" : "st-run"; }
+function stTxt(j) {
+  if (j.failed) return "❌ failed：" + (j.failReason || "");
+  if (j.stage === "done") return "✅ done" + (j.warningCount ? "（⚠" + j.warningCount + "）" : "");
+  if (j.stage === "paused") return "⏸ " + (j.failReason || "日預算已滿");
+  return "▶ " + j.stage + (j.step ? " " + j.step : "");
+}
+function refresh() {
+  fetch("/jobs.json", { headers: headers() })
+    .then(function (r) {
+      if (r.status === 403) throw new Error("未授權：先用 /?key=你的KEY 開一次清單頁（key 會存進瀏覽器），或把本頁掛在 Cloudflare Access 後面。");
+      return r.json();
+    })
+    .then(function (d) {
+      document.getElementById("jerr").textContent = "";
+      document.getElementById("rate").textContent = d.rateNTDPerM;
+      var t = d.today;
+      document.getElementById("strip").innerHTML =
+        '<div class="stat"><div class="v">' + t.tokens.toLocaleString() + '</div><div class="k">今日 tokens（上限 ' + t.dailyCapTokens.toLocaleString() + '）</div></div>' +
+        '<div class="stat"><div class="v">' + t.llmCalls + '</div><div class="k">今日 LLM 呼叫</div></div>' +
+        '<div class="stat"><div class="v">NT$ ' + t.estNTD + '</div><div class="k">今日估算費用</div></div>' +
+        '<div class="stat"><div class="v">' + d.jobs.filter(function (j) { return !j.failed && j.stage !== "done"; }).length + '</div><div class="k">進行中任務</div></div>';
+      var rows = d.jobs.map(function (j) {
+        var elapsed = (j.stage === "done" || j.failed)
+          ? Date.parse(j.updatedAt) - Date.parse(j.startedAt)
+          : Date.now() - Date.parse(j.startedAt);
+        return "<tr><td><a class='title' href='/watch/" + j.videoId + "' target='_blank' title='" + esc(j.title) + "'>" + esc(j.title) + "</a><br>" +
+          "<span class='hint'>" + j.videoId + "・<a href='/subs/" + j.videoId + "/status.json' target='_blank'>status</a></span></td>" +
+          "<td>" + esc(j.route || "") + "</td>" +
+          "<td class='" + stCls(j) + "'>" + esc(stTxt(j)) + "</td>" +
+          "<td class='num'>" + (j.tokensUsed || 0).toLocaleString() + "</td>" +
+          "<td class='num'>" + (j.estNTD || 0) + "</td>" +
+          "<td class='num'>" + fmtDur(elapsed) + "</td>" +
+          "<td class='num'>" + (j.updatedAt ? new Date(j.updatedAt).toLocaleTimeString() : "—") + "</td></tr>";
+      });
+      document.getElementById("rows").innerHTML = rows.join("") || "<tr><td colspan='7' class='hint'>還沒有任何任務</td></tr>";
+    })
+    .catch(function (e) { document.getElementById("jerr").textContent = String(e.message || e); });
+}
+refresh();
+setInterval(refresh, 15000);
+
 var out = document.getElementById("out");
 document.getElementById("go").onclick = function () {
   var m = (document.getElementById("url").value || "").match(/(?:v=|youtu\\.be\\/|shorts\\/)?([A-Za-z0-9_-]{11})(?:[?&#]|$)/);
@@ -641,16 +718,13 @@ document.getElementById("go").onclick = function () {
   if (dur > 0) body.durationMin = dur;
   var lang = document.getElementById("lang").value.trim();
   if (lang) body.lang = lang;
-  var headers = { "content-type": "application/json" };
-  var key = localStorage.getItem("ytplayer-key");
-  if (key) headers["x-ingest-key"] = key;
   out.textContent = "送出中…";
-  fetch("/watch-job/" + id, { method: "POST", headers: headers, body: JSON.stringify(body) })
+  fetch("/watch-job/" + id, { method: "POST", headers: headers(), body: JSON.stringify(body) })
     .then(function (r) { return r.json().then(function (j) { return { s: r.status, j: j }; }); })
     .then(function (r) {
       if (!r.j.ok) { out.innerHTML = '<span class="err">' + (r.j.error || ("HTTP " + r.s)) + "</span>"; return; }
-      out.innerHTML = '<span class="ok">已受理。</span>進度：<a href="/subs/' + id + '/status.json" target="_blank">status.json</a>' +
-        '・完成後：<a href="/watch/' + id + '" target="_blank">/watch/' + id + "</a>（翻好前會自動重試）";
+      out.innerHTML = '<span class="ok">已受理。</span>上表 15 秒內會出現進度・完成後：<a href="/watch/' + id + '" target="_blank">/watch/' + id + "</a>";
+      setTimeout(refresh, 3000);
     })
     .catch(function (e) { out.innerHTML = '<span class="err">' + e + "</span>"; });
 };
