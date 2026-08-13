@@ -191,6 +191,43 @@ describe('queue 步進（handleJob + FakeQueue）', () => {
     expect(r2.next).toEqual({ videoId: 'ksfm6jeTg3Q', step: 'glossary' });
   });
 
+  it('看門狗重排（非 force）＝真 resume：token 計數累計、checkpoint 保留不重付', async () => {
+    const SUBS = new FakeR2();
+    const env = envOf(SUBS);
+    const src = makeSource();
+    src.track = { languageCode: 'en', kind: 'asr' };
+    await SUBS.put('subs/ksfm6jeTg3Q/source.json', JSON.stringify(src));
+
+    let calls = 0;
+    const countingLlm = async (p: string) => (calls++, fakeLlm(p));
+    const plan = await runStep(env, { videoId: 'ksfm6jeTg3Q', step: 'plan' });
+    await runStep(env, plan.next!, countingLlm); // repair 0 完成（有 token 計數與 part 落地）
+    const afterRepair = calls;
+
+    // 模擬斷鏈：status 停更超過 STALE_MS（改舊 updatedAt），看門狗會重排 plan（非 force）
+    const st = readJson(SUBS, 'subs/ksfm6jeTg3Q/status.json') as JobStatus;
+    st.updatedAt = new Date(Date.now() - 11 * 60 * 1000).toISOString();
+    st.llmCalls = 7;
+    st.tokensUsed = 1234;
+    await SUBS.put('subs/ksfm6jeTg3Q/status.json', JSON.stringify(st));
+
+    const replan = await runStep(env, { videoId: 'ksfm6jeTg3Q', step: 'plan' });
+    const st2 = readJson(SUBS, 'subs/ksfm6jeTg3Q/status.json') as JobStatus;
+    expect(st2.tokensUsed).toBe(1234); // 計數器沒有被歸零（每片上限保險絲跨輪有效）
+    expect(st2.llmCalls).toBe(7);
+    const r = await runStep(env, replan.next!, countingLlm); // 重排後的 repair 0
+    expect(calls).toBe(afterRepair); // checkpoint 保留 → 冪等跳過，零 LLM 花費
+    expect(r.body.skipped).toBeTruthy();
+
+    // 對照組：force 重跑 = 人為動作，計數歸零、checkpoint 清掉
+    const forced = await runStep(env, { videoId: 'ksfm6jeTg3Q', step: 'plan', force: true });
+    const st3 = readJson(SUBS, 'subs/ksfm6jeTg3Q/status.json') as JobStatus;
+    expect(st3.tokensUsed).toBe(0);
+    expect(forced.next).toEqual({ videoId: 'ksfm6jeTg3Q', step: 'repair', batch: 0 });
+    await runStep(env, forced.next!, countingLlm);
+    expect(calls).toBeGreaterThan(afterRepair); // 真的重打了
+  });
+
   it('source 跑到一半被重新 ingest → 步驟偵測版本不符，改排 plan 重來', async () => {
     const SUBS = new FakeR2();
     const env = envOf(SUBS);
