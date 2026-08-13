@@ -4,7 +4,10 @@
   "main": "src/index.ts",
   "compatibility_date": "2026-07-01",
   "observability": { "enabled": true },
-  "vars": { "GEMINI_MODEL": "gemini-3.5-flash" },
+  // ⚠ 模型選擇的單一事實來源在這裡：git 部署會用本檔的 vars 蓋掉 dashboard 的明文變數
+  //（只有 Secret 倖存）— 在 dashboard 改模型會被下一次部署踩回來（2026-08-13 帳單事故成因之一）。
+  // 3.6-flash-lite：日常翻譯夠用且便宜；要升級品質改這裡再 push。
+  "vars": { "GEMINI_MODEL": "gemini-3.6-flash-lite" },
   // cron = 零成本看門狗（migration.md §2）：只掃描 + enqueue，永不碰 LLM。
   // 2026-08-13 成本事故的三個修法（分段可續跑、嘗試上限、開工即寫狀態）都已落在 queue 步驟裡。
   "triggers": { "crons": ["*/5 * * * *"] },
