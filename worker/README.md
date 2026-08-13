@@ -40,7 +40,7 @@
 | GET | `/subs/{videoId}/{file}` | 公開 | `source/sentences/glossary/bilingual/info.json`、`bilingual.srt` |
 | GET | `/health` | 公開 | 狀態（`ingestKeyConfigured` 要是 `true`） |
 | POST | `/ingest` | key | 收 ext payload，存 `subs/{videoId}/source.json` |
-| POST | `/translate/{videoId}` | key | 手動觸發翻譯（`?force=1` 忽略 cache；平常交給 cron 即可） |
+| POST | `/translate/{videoId}` | key | 手動觸發翻譯，**預設非同步**（202 ack，結果寫進 `last-run.json`）。`?force=1` 忽略 cache、`?wait=1` 同步等結果（僅適合短片） |
 
 Cron（`*/5`）自動掃 R2：Tier 2 且 bilingual 缺少/過期 → 翻譯，一次一支。
 
@@ -52,10 +52,12 @@ Worker → Settings → Domains & Routes → Add → Custom domain → `ytplayer
 ### 翻譯用法
 
 ```bash
-# 跑翻譯（20 分鐘影片約 1–2 分鐘，同步等）
-curl -X POST -H "x-ingest-key: $KEY" "https://ytplayer.<subdomain>.workers.dev/translate/<videoId>"
-# 拿結果
-curl -H "x-ingest-key: $KEY" "https://ytplayer.<subdomain>.workers.dev/subs/<videoId>/bilingual.srt"
+# 觸發翻譯（立刻回 202；背景跑完，長影片也不會因斷線被砍）
+curl -X POST -H "x-ingest-key: $KEY" "https://ytplayer.ai-apps.work/translate/<videoId>?force=1"
+# 看這次跑的結果（stats / warnings / 錯誤）
+curl "https://ytplayer.ai-apps.work/subs/<videoId>/last-run.json"
+# 拿字幕
+curl "https://ytplayer.ai-apps.work/subs/<videoId>/bilingual.srt"
 ```
 
 回應的 `stats.warnings` 必須為空才算驗收通過（禁用詞殘留、翻譯失敗都會列在裡面）。
