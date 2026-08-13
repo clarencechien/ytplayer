@@ -47,6 +47,20 @@ const STYLE = `
   }
   body.peek #subBand { opacity: .06; } /* 按住 H：暫看畫面 */
   body[data-mode="off"] #subBand { display: none; }
+  /* 畫面字卡層（video 路由 kind=card）：疊畫面上緣、短促字卡樣式，與對白字幕分層 */
+  #cardLayer {
+    position: absolute; top: 6%; left: 50%; transform: translateX(-50%);
+    display: flex; flex-direction: column; gap: 6px; align-items: center;
+    pointer-events: none; z-index: 4; max-width: 90%;
+  }
+  #cardLayer .card {
+    background: rgba(20,16,4,calc(var(--alpha) * .82)); color: #ffd54a;
+    padding: 4px 12px; border-radius: 8px; border: 1px solid rgba(255,213,74,.35);
+    font-size: calc(15px * var(--scale)); font-weight: 700; white-space: pre-line; text-align: center;
+  }
+  body.peek #cardLayer { opacity: .06; }
+  body[data-mode="off"] #cardLayer, body[data-mode="en"] #cardLayer { display: none; }
+  .row .kindCard { color: #ffd54a; font-size: 11px; margin-right: 4px; }
 
   /* 透明點擊層：點影片=播放/暫停由我們接手，焦點不會掉進 iframe、熱鍵永遠有效。
      底部留 90px；「YT 介面：開放」時整層讓開，原生控制全部可直接操作 */
@@ -194,6 +208,7 @@ export function watchPage(videoId: string): string {
     <div class="video-wrap">
       <div id="player"></div>
       <div id="clickLayer" title="點擊：播放/暫停・雙擊：全螢幕"></div>
+      <div id="cardLayer"></div>
       <div id="subBand"><div id="subEn"></div><div id="subZh"></div><div id="subNote"></div></div>
     </div>
   </div>
@@ -242,7 +257,7 @@ var MOBILE = (window.matchMedia && matchMedia("(pointer: coarse)").matches) ||
 var S = { mode: 0, notes: true, follow: !MOBILE, scale: 1, alpha: 0, speed: 1 };
 var prevMode = 0; // C 鍵切回「無」之前的模式
 try { Object.assign(S, JSON.parse(localStorage.getItem("ytplayer-settings") || "{}")); } catch (e) {}
-var cues = [], rows = [], cur = -1;
+var cues = [], rows = [], cur = -1, cardCues = [], cardKey = "";
 var yt = null, ytReady = false, pendingInit = false;
 var list = document.getElementById("list");
 var subEn = document.getElementById("subEn"), subZh = document.getElementById("subZh"), subNote = document.getElementById("subNote");
@@ -416,20 +431,26 @@ function load() {
 }
 
 function init(doc) {
-  cues = doc.cues || [];
+  var all = doc.cues || [];
   // schema v2 用 orig 取代 en（kvsplayer 合併後 ko/ja/en 通用）；v1 舊資料照舊
-  cues.forEach(function (c) { if (c.en == null && c.orig != null) c.en = c.orig; });
+  all.forEach(function (c) { if (c.en == null && c.orig != null) c.en = c.orig; });
+  // 字卡（video 路由 kind=card）走獨立圖層；對白字幕帶與同步邏輯只吃 speech
+  cardCues = all.filter(function (c) { return c.kind === "card"; });
+  cues = all.filter(function (c) { return c.kind !== "card"; });
   document.getElementById("title").textContent = doc.meta && doc.meta.title || VID;
   document.getElementById("meta").textContent =
-    (doc.meta && doc.meta.channel || "") + "・" + cues.length + " 句・" + (doc.model || "") +
+    (doc.meta && doc.meta.channel || "") + "・" + cues.length + " 句" +
+    (cardCues.length ? "・🃏 " + cardCues.length + " 字卡" : "") + "・" + (doc.model || "") +
+    (doc.trust === "model" ? "・⏱ 時間軸為模型估算" : "") +
     (doc.warnings && doc.warnings.length ? "・⚠ " + doc.warnings.length + " warnings" : "");
   document.title = (doc.meta && doc.meta.title || VID) + " — ytplayer";
   list.innerHTML = "";
   rows = [];
-  cues.forEach(function (c, i) {
+  all.forEach(function (c) {
     var d = document.createElement("div");
     d.className = "row";
     var html = '<span class="t">' + fmtTime(c.start) + "</span>" +
+      (c.kind === "card" ? '<span class="kindCard">🃏 字卡</span>' : "") +
       '<span class="zh"></span><span class="en"></span>';
     if (c.note) html += '<span class="note"></span>';
     d.innerHTML = html;
@@ -438,7 +459,7 @@ function init(doc) {
     if (c.note) d.querySelector(".note").textContent = c.note;
     d.onclick = function () { if (yt && yt.seekTo) { yt.seekTo(c.start, true); yt.playVideo(); } };
     list.appendChild(d);
-    rows.push(d);
+    if (c.kind !== "card") rows.push(d); // rows 與 cues（speech）平行，供高亮同步
   });
   if (ytReady) createYT(); else pendingInit = true;
   setInterval(tick, 150);
@@ -455,9 +476,31 @@ function findCue(t) {
   return -1;
 }
 
+function tickCards(t) {
+  if (!cardCues.length) return;
+  var vis = [];
+  for (var i = 0; i < cardCues.length; i++) {
+    var c = cardCues[i];
+    if (c.start > t) break; // 依 start 排序，之後的都還沒到
+    if (t < c.end + 0.5) vis.push(c);
+  }
+  var key = vis.map(function (c) { return c.start; }).join(",");
+  if (key === cardKey) return;
+  cardKey = key;
+  var layer = document.getElementById("cardLayer");
+  layer.innerHTML = "";
+  vis.forEach(function (c) {
+    var d = document.createElement("div");
+    d.className = "card";
+    d.textContent = c.zh;
+    layer.appendChild(d);
+  });
+}
+
 function tick() {
   if (!yt || !yt.getCurrentTime) return;
   var t = yt.getCurrentTime();
+  tickCards(t);
   var idx = findCue(t);
   if (idx === cur) return;
   if (cur >= 0 && rows[cur]) rows[cur].classList.remove("cur");
@@ -543,6 +586,74 @@ fetch("/videos.json", { headers: savedKey ? { "x-ingest-key": savedKey } : {} })
 }).catch(function () {
   document.getElementById("videos").innerHTML = '<div class="msg">清單載入失敗</div>';
 });
+</script>
+</body>
+</html>`;
+}
+
+// 看片路線（video route）人用入口：貼連結 → POST /watch-job/{id}。
+// 認證：頁面本身建議用 Cloudflare Access 蓋住 /admin；API 呼叫帶 localStorage 的 key 亦可。
+export function adminPage(): string {
+  return `<!DOCTYPE html>
+<html lang="zh-Hant-TW">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex">
+<title>ytplayer — 看片任務</title>
+<style>
+  :root { color-scheme: dark; }
+  body { margin: 0; background: #0f0f13; color: #eee; font: 15px/1.6 system-ui, "Noto Sans TC", sans-serif; }
+  main { max-width: 640px; margin: 40px auto; padding: 0 16px; }
+  h1 { font-size: 20px; } .hint { color: #999; font-size: 13px; }
+  label { display: block; margin: 14px 0 4px; color: #bbb; }
+  input { width: 100%; box-sizing: border-box; background: #1a1a22; color: #eee; border: 1px solid #333;
+          border-radius: 8px; padding: 10px 12px; font-size: 15px; }
+  button { margin-top: 18px; background: #ffd54a; color: #000; border: 0; border-radius: 8px;
+           padding: 10px 22px; font-size: 15px; font-weight: 700; cursor: pointer; }
+  #out { margin-top: 18px; white-space: pre-wrap; font-family: ui-monospace, monospace; font-size: 13px; }
+  .ok { color: #7c5; } .err { color: #f66; }
+  a { color: #59f; }
+</style>
+</head>
+<body>
+<main>
+  <h1>🎬 看片任務（Gemini 直接看片）</h1>
+  <p class="hint">給「字卡型韓綜」與「完全沒有 CC」的影片。成本約為純文字翻譯的 30 倍
+  （MEDIUM 解析度 ≈ 300 token/秒），一般有原文 CC 的影片請照常用 ext ingest。</p>
+  <label>YouTube 連結或影片 ID</label>
+  <input id="url" placeholder="https://www.youtube.com/watch?v=… 或 11 碼 ID">
+  <label>片長（分鐘）— 建議填，比自動探測可靠</label>
+  <input id="dur" type="number" min="1" placeholder="例：72（留空 = countTokens 自動探測 + 開放式掃描）">
+  <label>原文語言（預設 ko）</label>
+  <input id="lang" placeholder="ko">
+  <button id="go">開始看片</button>
+  <div id="out"></div>
+</main>
+<script>
+var out = document.getElementById("out");
+document.getElementById("go").onclick = function () {
+  var m = (document.getElementById("url").value || "").match(/(?:v=|youtu\\.be\\/|shorts\\/)?([A-Za-z0-9_-]{11})(?:[?&#]|$)/);
+  if (!m) { out.innerHTML = '<span class="err">無法解析影片 ID</span>'; return; }
+  var id = m[1];
+  var body = {};
+  var dur = +document.getElementById("dur").value;
+  if (dur > 0) body.durationMin = dur;
+  var lang = document.getElementById("lang").value.trim();
+  if (lang) body.lang = lang;
+  var headers = { "content-type": "application/json" };
+  var key = localStorage.getItem("ytplayer-key");
+  if (key) headers["x-ingest-key"] = key;
+  out.textContent = "送出中…";
+  fetch("/watch-job/" + id, { method: "POST", headers: headers, body: JSON.stringify(body) })
+    .then(function (r) { return r.json().then(function (j) { return { s: r.status, j: j }; }); })
+    .then(function (r) {
+      if (!r.j.ok) { out.innerHTML = '<span class="err">' + (r.j.error || ("HTTP " + r.s)) + "</span>"; return; }
+      out.innerHTML = '<span class="ok">已受理。</span>進度：<a href="/subs/' + id + '/status.json" target="_blank">status.json</a>' +
+        '・完成後：<a href="/watch/' + id + '" target="_blank">/watch/' + id + "</a>（翻好前會自動重試）";
+    })
+    .catch(function (e) { out.innerHTML = '<span class="err">' + e + "</span>"; });
+};
 </script>
 </body>
 </html>`;
