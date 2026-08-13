@@ -180,6 +180,29 @@ describe('translateNextPending（cron 佇列）', () => {
     expect(SUBS.store.has('subs/AAAAAAAAAAA/bilingual.json')).toBe(false);
   });
 
+  it('非英文 ASR 有 .allow-any-asr 標記時才進佇列（實驗用單片豁免）', async () => {
+    const SUBS = new FakeR2();
+    const ja = makeSource();
+    ja.tier = 3;
+    ja.track = { languageCode: 'ja', kind: 'asr' };
+    await SUBS.put('subs/ksfm6jeTg3Q/source.json', JSON.stringify(ja));
+    expect((await translateNextPending(envOf(SUBS), fakeLlm)).translated).toBeUndefined();
+
+    await SUBS.put('subs/ksfm6jeTg3Q/.allow-any-asr', new Date().toISOString());
+    const r = await translateNextPending(envOf(SUBS), fakeLlm);
+    expect(r.translated).toBe('ksfm6jeTg3Q');
+    expect(r.status).toBe(200);
+  });
+
+  it('標記不會讓中文軌通過（紅線仍在）', async () => {
+    const SUBS = new FakeR2();
+    const zh = makeSource();
+    zh.track = { languageCode: 'zh-TW', kind: 'asr' };
+    await SUBS.put('subs/ksfm6jeTg3Q/source.json', JSON.stringify(zh));
+    await SUBS.put('subs/ksfm6jeTg3Q/.allow-any-asr', new Date().toISOString());
+    expect((await translateNextPending(envOf(SUBS), fakeLlm)).translated).toBeUndefined();
+  });
+
   it('英文 ASR 軌會進佇列（Phase 2.5）', async () => {
     const SUBS = new FakeR2();
     const t3 = makeSource();
