@@ -137,7 +137,8 @@ export default {
       );
     }
 
-    const FILES = ['source.json', 'sentences.json', 'glossary.json', 'bilingual.json', 'bilingual.srt', 'info.json', 'last-run.json'];
+    // .allow-any-asr 也可讀：實驗標記有沒有落地，要看得見才不用猜
+    const FILES = ['source.json', 'sentences.json', 'glossary.json', 'bilingual.json', 'bilingual.srt', 'info.json', 'last-run.json', '.allow-any-asr'];
     const m = path.match(/^\/subs\/([A-Za-z0-9_-]{11})\/([a-z.-]+)$/);
     if (req.method === 'GET' && m && FILES.includes(m[2])) {
       const obj = await env.SUBS.get(`subs/${m[1]}/${m[2]}`);
