@@ -35,6 +35,9 @@ Caption track 有四個層級，每層是不同的題目（詳見 [docs/handoff-
    popup 給的 `/watch` 連結幾分鐘後自己出現字幕
 3. 重翻：再 ingest 一次（source 變新即自動重翻）；改 prompt 後重跑：`POST /translate/{id}?force=1`
    （`force` 也是唯一能重啟「已標記失敗」影片的方式 — 連續失敗 3 次會永久停，防燒錢）
+4. 舊片字幕「太快消失」：`/admin` 儀表板該列按「⏱ 修時間」（零 LLM 費用、冪等可重按）。
+   ASR 句界要貼齊語音則需 **ext 更新後重新 ingest**（詞級時間，見
+   [docs/subtitle-timing.md](docs/subtitle-timing.md)）
 
 **字卡型韓綜 / 無 CC 的影片（video 路由）**
 開 `/admin` 貼連結（建議填片長），Gemini 分段看片：聽寫 + 讀字卡 + 翻譯一次完成。
@@ -87,6 +90,7 @@ video 路由的影片另有**字卡層**（🃏 疊畫面上緣、逐句稿有�
 | [docs/handoff-append-01.md](docs/handoff-append-01.md) | 影片分層策略增補 |
 | [docs/migration.md](docs/migration.md) | **kvsplayer 合併方案與執行紀錄（M0–M5、保險絲設計、隱私）** |
 | [docs/glossary-layers.md](docs/glossary-layers.md) | Glossary 疊層計畫（channel/genre/per-video，未實作） |
+| [docs/subtitle-timing.md](docs/subtitle-timing.md) | 字幕時間軸：病因與修法（A 詞級斷句 + B 顯示鏈接，已實作） |
 | [docs/phase0-findings.md](docs/phase0-findings.md) | Phase 0 實測結論（POT、CORS、SPA stale…） |
 | [docs/phase1-plan.md](docs/phase1-plan.md) / [docs/phase2-plan.md](docs/phase2-plan.md) | 各階段實作計畫 |
 | [docs/asr-language-experiment.md](docs/asr-language-experiment.md) | 非英文 ASR 實測 + 成本事故解剖 + 端到端驗證 |

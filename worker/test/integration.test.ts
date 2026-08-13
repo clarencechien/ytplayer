@@ -64,7 +64,7 @@ describe('runPipeline（in-process 整合）', () => {
     expect(bilingual.cues.length).toBe(3);
     expect(bilingual.cues[1]).toMatchObject({
       start: 2,
-      end: 6,
+      end: 5.95, // retime 內建：與下一句保留 0.05s 縫（docs/subtitle-timing.md B）
       kind: 'speech',
       orig: 'Agents are moving to production today.',
       zh: '中文1。',

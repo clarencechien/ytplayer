@@ -4,6 +4,8 @@ export interface Cue {
   start: number;
   dur: number;
   text: string;
+  // ASR 逐詞時間：[相對 cue start 的秒數, 詞]。詞級斷句用（docs/subtitle-timing.md）
+  segs?: Array<[number, string]>;
 }
 
 export interface IngestPayload {
@@ -74,6 +76,24 @@ export function validateIngest(p: unknown): string[] {
       if (typeof c.dur !== 'number' || !Number.isFinite(c.dur) || c.dur < 0) { errors.push(`cues[${i}].dur 錯誤`); break; }
       if (typeof c.text !== 'string' || c.text.length === 0 || c.text.length > 2000) { errors.push(`cues[${i}].text 錯誤`); break; }
       if ((c.start as number) < prev) { errors.push(`cues[${i}] 時間軸未遞增`); break; }
+      if (c.segs !== undefined) {
+        const segs = c.segs;
+        const bad =
+          !Array.isArray(segs) ||
+          segs.length > 500 ||
+          segs.some(
+            (s) =>
+              !Array.isArray(s) ||
+              s.length !== 2 ||
+              typeof s[0] !== 'number' ||
+              !Number.isFinite(s[0]) ||
+              s[0] < 0 ||
+              typeof s[1] !== 'string' ||
+              (s[1] as string).length === 0 ||
+              (s[1] as string).length > 200
+          );
+        if (bad) { errors.push(`cues[${i}].segs 格式錯誤`); break; }
+      }
       prev = c.start as number;
     }
   }

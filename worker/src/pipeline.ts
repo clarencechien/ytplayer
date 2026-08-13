@@ -322,8 +322,9 @@ export function assembleBilingual(
       extendedHits.push(...scanExtended(tr.zh));
     }
     out.push({
-      start: Math.round(first.start * 1000) / 1000,
-      end: Math.round((last.start + last.dur) * 1000) / 1000,
+      // 詞級斷句的句子自帶精準起訖（docs/subtitle-timing.md A）；否則退回 cue 邊界
+      start: Math.round((s.start ?? first.start) * 1000) / 1000,
+      end: Math.round((s.end ?? last.start + last.dur) * 1000) / 1000,
       en: s.text,
       zh: tr?.zh ?? s.text,
       ...(tr?.note ? { note: tr.note } : {}),
