@@ -126,16 +126,22 @@ ${chunk.after.map((s) => s.text).join('\n') || '（無）'}
 [{"id":0,"zh":"中文翻譯","note":"選填譯註"}]`;
 }
 
-// Phase 2.5 — 英文 ASR 修稿（Tier 3 + en 專用）
-export function buildRepairPrompt(meta: PromptMeta, chunk: TranslateChunkInput, extraHint?: string): string {
-  return `你是英文字幕編輯。以下句子來自 YouTube 自動語音辨識（ASR），可能含有：
+// Phase 2.5 — ASR 修稿（原文語言由 sourceLang 決定，勿寫死英文：
+// 對日文說「修復成正確的英文」會直接翻成英文，整個 pipeline 就毀了）
+export function buildRepairPrompt(
+  meta: PromptMeta,
+  chunk: TranslateChunkInput,
+  extraHint?: string,
+  sourceLang = 'en'
+): string {
+  return `你是字幕編輯，處理語言代碼為 ${sourceLang} 的字幕。以下句子來自 YouTube 自動語音辨識（ASR），可能含有：
 同音字聽寫錯誤、專有名詞拼錯、[music]／[applause] 之類的雜訊標記、標點不完整。
 
 影片背景（判斷專有名詞的依據）：
 標題：${meta.title}／頻道：${meta.channel}
 簡介節錄：${meta.description.slice(0, 300)}
 
-任務：逐句修復成乾淨正確的英文。規則：
+任務：逐句修復成乾淨正確的原文（**維持 ${sourceLang} 這個語言，絕對不要翻譯成其他語言**）。規則：
 - 保持原意與口語風格：不改寫、不濃縮、不翻譯、不合併句子
 - 移除 [music]、[applause] 等雜訊標記
 - 依上下文修正明顯聽錯的詞，特別是人名、公司、產品、術語

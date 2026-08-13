@@ -81,7 +81,13 @@ export default {
     if (req.method === 'POST' && t) {
       if (!authorized) return json({ ok: false, error: 'unauthorized' }, 403);
       try {
-        const { status, body } = await runPipeline(env, t[1], url.searchParams.get('force') === '1');
+        const { status, body } = await runPipeline(
+          env,
+          t[1],
+          url.searchParams.get('force') === '1',
+          undefined,
+          url.searchParams.get('allowAnyAsr') === '1'
+        );
         return json(body, status);
       } catch (e) {
         return json({ ok: false, error: e instanceof Error ? e.message : String(e) }, 500);

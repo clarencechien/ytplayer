@@ -55,7 +55,7 @@ const fakeLlm = async (prompt: string): Promise<string> => {
     return '[{"term":"agents","zh":"Agent","note":"能自主完成任務的 AI 程式"}]';
   }
   const ids = [...prompt.matchAll(/^(\d+): /gm)].map((m) => Number(m[1]));
-  if (prompt.includes('英文字幕編輯')) {
+  if (prompt.includes('你是字幕編輯')) {
     return JSON.stringify(ids.map((id) => ({ id, en: `Repaired sentence ${id}.` })));
   }
   return JSON.stringify(ids.map((id) => ({ id, zh: `中文${id}。` })));

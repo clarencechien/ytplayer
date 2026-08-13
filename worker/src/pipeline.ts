@@ -187,7 +187,8 @@ function parseChunkOutput(
 export async function repairChunk(
   llm: LlmFn,
   meta: PromptMeta,
-  chunk: TranslateChunkInput
+  chunk: TranslateChunkInput,
+  sourceLang = 'en'
 ): Promise<{ byId: Map<number, string>; retries: number }> {
   const expected = new Set(chunk.target.map((s) => s.id));
   const parse = (raw: string): Map<number, string> => {
@@ -208,7 +209,7 @@ export async function repairChunk(
     if (attempt > 0) retries++;
     const hint = attempt > 0 ? `上一次輸出有問題（${lastProblem}）。務必輸出純 JSON，且涵蓋所有 id。` : undefined;
     try {
-      const parsed = parse(await llm(buildRepairPrompt(meta, chunk, hint)));
+      const parsed = parse(await llm(buildRepairPrompt(meta, chunk, hint, sourceLang)));
       if (parsed.size > byId.size) byId = parsed;
       if (byId.size < expected.size) lastProblem = `預期 ${expected.size} 句只得到 ${byId.size} 句`;
     } catch (e) {
@@ -519,7 +520,10 @@ export async function runPipeline(
   env: PipelineEnv,
   videoId: string,
   force: boolean,
-  llmOverride?: LlmFn
+  llmOverride?: LlmFn,
+  // 實驗用旁路：允許非英文 ASR（僅手動 /translate?allowAnyAsr=1 會傳，cron 佇列永遠不傳）
+  // 用途：量測非英文 ASR 品質以驗證 append-01 §C 的假設，量完再決定是否開放預設
+  allowAnyAsr = false
 ): Promise<{ status: number; body: Record<string, unknown> }> {
   const t0 = Date.now();
   const model = env.GEMINI_MODEL || 'gemini-3.5-flash';
@@ -527,7 +531,8 @@ export async function runPipeline(
   const srcObj = await env.SUBS.get(`subs/${videoId}/source.json`);
   if (!srcObj) return { status: 404, body: { ok: false, error: 'source.json 不存在，請先用 ext ingest' } };
   const src = JSON.parse(await srcObj.text()) as SourceDoc;
-  if (!canTranslate(src)) {
+  const asrBypass = allowAnyAsr && src.track.kind === 'asr' && !/^zh/i.test(src.track.languageCode || '');
+  if (!canTranslate(src) && !asrBypass) {
     return { status: 422, body: { ok: false, error: `不在範圍：${untranslatableReason(src)}` } };
   }
   const needRepair = src.track.kind === 'asr';
@@ -569,7 +574,7 @@ export async function runPipeline(
       Array.from({ length: Math.min(4, rChunks.length) }, async () => {
         while (rNext < rChunks.length) {
           const idx = rNext++;
-          rOutcomes[idx] = await repairChunk(llm, src.meta, rChunks[idx]);
+          rOutcomes[idx] = await repairChunk(llm, src.meta, rChunks[idx], src.track.languageCode);
         }
       })
     );
