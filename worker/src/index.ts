@@ -262,9 +262,20 @@ export default {
       const { route, reason } = routeSource(src);
       if (route === 'reject') return json({ ok: false, error: `不在範圍：${reason}` }, 422);
       const force = url.searchParams.get('force') === '1';
-      await env.JOBS.send({ videoId, step: 'plan', force });
+      // ?model= 本輪模型覆寫（A/B 測試用）：只影響這一輪，不動 wrangler 預設
+      const modelParam = url.searchParams.get('model') ?? undefined;
+      if (modelParam && !/^[a-z0-9.-]{3,50}$/i.test(modelParam)) {
+        return json({ ok: false, error: 'model 參數格式錯誤' }, 400);
+      }
+      await env.JOBS.send({ videoId, step: 'plan', force, ...(modelParam ? { model: modelParam } : {}) });
       return json(
-        { ok: true, accepted: videoId, force, note: '已排入翻譯佇列，進度請看 /subs/{videoId}/status.json' },
+        {
+          ok: true,
+          accepted: videoId,
+          force,
+          ...(modelParam ? { model: modelParam } : {}),
+          note: '已排入翻譯佇列，進度請看 /subs/{videoId}/status.json',
+        },
         202
       );
     }
