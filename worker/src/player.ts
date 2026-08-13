@@ -486,7 +486,32 @@ export function indexPage(): string {
 <header><h1>ytplayer — 中英雙語字幕</h1><span class="meta">自用 dogfood・Tier 2 自動翻譯</span></header>
 <main><div id="videos"><div class="msg">載入中…</div></div></main>
 <script>
-fetch("/videos.json").then(function (r) { return r.json(); }).then(function (vids) {
+// 清單需要 key（等於觀看紀錄）。首次用 /?key=XXX 進來即存進 localStorage 並清掉網址，
+// 之後直接開 / 就好；key 不進網址列歷史。單片 /watch/{id} 仍公開、可分享
+var KEY_STORE = "ytplayer-key";
+var qs = new URLSearchParams(location.search);
+if (qs.get("key")) {
+  localStorage.setItem(KEY_STORE, qs.get("key"));
+  history.replaceState(null, "", location.pathname);
+}
+var savedKey = localStorage.getItem(KEY_STORE) || "";
+
+function askKey(msg) {
+  var box = document.getElementById("videos");
+  box.innerHTML = '<div class="msg">' + msg +
+    '<br><br><input id="k" type="password" placeholder="INGEST_KEY" style="padding:6px 8px;border-radius:6px;border:1px solid var(--line);background:var(--panel);color:var(--fg)">' +
+    ' <button id="kb" style="padding:6px 12px;border:0;border-radius:6px;background:var(--accent);cursor:pointer">記住</button></div>';
+  document.getElementById("kb").onclick = function () {
+    localStorage.setItem(KEY_STORE, document.getElementById("k").value.trim());
+    location.reload();
+  };
+}
+
+fetch("/videos.json", { headers: savedKey ? { "x-ingest-key": savedKey } : {} }).then(function (r) {
+  if (r.status === 403) { askKey("影片清單需要金鑰（單片播放連結不需要）。"); return null; }
+  return r.json();
+}).then(function (vids) {
+  if (!vids) return;
   var box = document.getElementById("videos");
   box.innerHTML = "";
   if (!vids.length) { box.innerHTML = '<div class="msg">還沒有影片。去 YouTube 開影片 → 開 CC 選原文軌 → 點 ext 送出。</div>'; return; }
