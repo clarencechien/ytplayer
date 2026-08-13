@@ -9,7 +9,9 @@
   // 2026-08-13 成本事故的三個修法（分段可續跑、嘗試上限、開工即寫狀態）都已落在 queue 步驟裡。
   "triggers": { "crons": ["*/5 * * * *"] },
   "r2_buckets": [
-    { "binding": "SUBS", "bucket_name": "ytplayer-subs" }
+    { "binding": "SUBS", "bucket_name": "ytplayer-subs" },
+    // kvsplayer 舊資料（M4 遷移期間唯讀取用；M5 收尾後移除本行）
+    { "binding": "KVS", "bucket_name": "kvs-krsub" }
   ],
   // Queues（Workers Paid）：pipeline 拆成有界小步自我續鏈；先在 Dashboard 建 queue `ytplayer-jobs`。
   // max_retries 3 = 保險絲第 2 層的底；max_concurrency 2 = 花費節流（同時最多兩步在燒）

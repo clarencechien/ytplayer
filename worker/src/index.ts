@@ -13,18 +13,23 @@
 // 見 asr-language-experiment.md §4）；cron 是零成本看門狗。
 
 import { validateIngest } from './validate';
+import { migrateKvs } from './migrate';
 import { listVideos, routeSource } from './pipeline';
-import { handleJob, watchdog, type JobMsg, type MsgLike } from './jobs';
-import { watchPage, indexPage } from './player';
+import { handleJob, watchdog, type JobMsg, type MsgLike, type WatchRequest } from './jobs';
+import { watchPage, indexPage, adminPage } from './player';
 
 export interface Env {
   SUBS: R2Bucket;
+  KVS?: R2Bucket; // kvsplayer 舊資料（M4 遷移用，M5 收尾後移除綁定）
   JOBS: Queue<JobMsg>;
   INGEST_KEY?: string;
   GEMINI_API_KEY?: string;
   GEMINI_MODEL?: string;
+  GEMINI_MEDIA_RES?: string;
   VIDEO_TOKEN_CAP?: string;
+  WATCH_TOKEN_CAP?: string;
   DAILY_TOKEN_CAP?: string;
+  ALLOWED_EMAIL?: string; // Cloudflare Access 使用者白名單（/admin 的人用認證；程式仍用 key）
 }
 
 // ext popup 與 player 頁都以跨域 fetch 存取，統一開 CORS，安全性由 key 把關。
@@ -51,10 +56,14 @@ export default {
     if (req.method === 'OPTIONS') return new Response(null, { status: 204, headers: BASE });
 
     const keyConfigured = typeof env.INGEST_KEY === 'string' && env.INGEST_KEY.length > 0;
+    // 兩種認證並存（migration.md §5）：人用 Cloudflare Access（SSO 後注入 email header）、程式用 key
+    const accessEmail = req.headers.get('cf-access-authenticated-user-email');
+    const accessOk = !!env.ALLOWED_EMAIL && accessEmail === env.ALLOWED_EMAIL;
     const authorized =
       !keyConfigured ||
       req.headers.get('x-ingest-key') === env.INGEST_KEY ||
-      url.searchParams.get('key') === env.INGEST_KEY;
+      url.searchParams.get('key') === env.INGEST_KEY ||
+      accessOk;
     const warning = keyConfigured ? undefined : '尚未設定 INGEST_KEY secret，任何人都可寫入';
 
     const html = (body: string) =>
@@ -70,7 +79,14 @@ export default {
         headers: { 'content-type': 'text/plain; charset=utf-8', ...BASE },
       });
     }
+    // kvsplayer 舊連結相容：/?v={id} → /watch/{id}
+    const oldV = url.searchParams.get('v');
+    if (req.method === 'GET' && path === '/' && oldV && /^[A-Za-z0-9_-]{11}$/.test(oldV)) {
+      return Response.redirect(`${url.origin}/watch/${oldV}`, 302);
+    }
     if (req.method === 'GET' && path === '/') return html(indexPage());
+    // 看片路線的人用入口（貼連結）。建議再套 Cloudflare Access 蓋 /admin/*
+    if (req.method === 'GET' && path === '/admin') return html(adminPage());
     // 清單 = 觀看紀錄，不對外
     if (req.method === 'GET' && path === '/videos.json') {
       if (!authorized) return json({ ok: false, error: 'unauthorized' }, 403);
@@ -103,6 +119,43 @@ export default {
       return json({ ok: true, key, cueCount: p.cues.length, route, ...(reason ? { reason } : {}), warning });
     }
 
+    // video 路由（Gemini 看片）：Tier 3 字卡型韓綜 / Tier 4 無 CC。成本 ~30 倍，永遠是明示選擇。
+    // body（皆可省）：{ url?, durationMin?, lang?, title? }；durationMin 給了就關 open 模式（較可靠）
+    const wj = path.match(/^\/watch-job\/([A-Za-z0-9_-]{11})$/);
+    if (req.method === 'POST' && wj) {
+      if (!authorized) return json({ ok: false, error: 'unauthorized' }, 403);
+      const videoId = wj[1];
+      let body: Record<string, unknown> = {};
+      try {
+        body = (await req.json()) as Record<string, unknown>;
+      } catch {
+        /* body 可省略 */
+      }
+      const reqDoc: WatchRequest = {
+        requestedAt: new Date().toISOString(),
+        ...(Number(body.durationMin) > 0 ? { durationMin: Number(body.durationMin) } : {}),
+        ...(typeof body.lang === 'string' && body.lang ? { lang: body.lang } : {}),
+        ...(typeof body.title === 'string' && body.title ? { title: body.title } : {}),
+      };
+      await env.SUBS.put(`subs/${videoId}/watch.json`, JSON.stringify(reqDoc), {
+        httpMetadata: { contentType: 'application/json' },
+      });
+      const force = url.searchParams.get('force') === '1';
+      await env.JOBS.send({ videoId, step: 'plan', route: 'video', force });
+      return json(
+        { ok: true, accepted: videoId, route: 'video', note: '看片任務已排入，進度看 /subs/{videoId}/status.json' },
+        202
+      );
+    }
+
+    // M4 一次性遷移：kvsplayer R2（kvs-krsub）→ schema v2。純 R2 拷貝零 LLM，可重跑。
+    if (req.method === 'POST' && path === '/migrate-kvs') {
+      if (!authorized) return json({ ok: false, error: 'unauthorized' }, 403);
+      if (!env.KVS) return json({ ok: false, error: '未綁定 KVS bucket（wrangler.jsonc r2_buckets）' }, 500);
+      const r = await migrateKvs(env.KVS, env.SUBS, url.searchParams.get('overwrite') === '1');
+      return json({ ok: true, ...r });
+    }
+
     // 手動排入翻譯：非同步（202 即回），進度看 /subs/{id}/status.json
     const t = path.match(/^\/translate\/([A-Za-z0-9_-]{11})$/);
     if (req.method === 'POST' && t) {
@@ -129,6 +182,7 @@ export default {
       'bilingual.srt',
       'info.json',
       'status.json',
+      'watch.json',
       'last-run.json', // 舊資料仍可讀（新系統不再寫）
     ];
     const m = path.match(/^\/subs\/([A-Za-z0-9_-]{11})\/([a-z.-]+)$/);
@@ -146,7 +200,12 @@ export default {
   // 後永久失敗）都在 handleJob 內。
   async queue(batch: MessageBatch, env: Env): Promise<void> {
     for (const msg of batch.messages) {
-      await handleJob(msg as unknown as MsgLike, env);
+      const m = msg as unknown as MsgLike;
+      // 每訊息頭尾都 log（observability 已開）：步驟死在中途時，「有 start 沒 end」就是證據
+      console.log(`job start: ${m.body.videoId} ${m.body.step}${m.body.batch != null ? ':' + m.body.batch : ''} (attempt ${m.attempts})`);
+      const t0 = Date.now();
+      await handleJob(m, env);
+      console.log(`job end: ${m.body.videoId} ${m.body.step} in ${Date.now() - t0}ms`);
     }
   },
 

@@ -22,18 +22,35 @@ import {
   attachGlossaryNotes,
   toSrt,
   routeSource,
+  scanBanned,
   type SourceDoc,
   type GlossaryEntry,
   type BilingualCue,
   type PipelineStats,
 } from './pipeline';
+import {
+  initWatchState,
+  nextSegment,
+  advance,
+  applyFailureLadder,
+  parseWatchOutput,
+  sanitizeWatchCues,
+  makeGeminiWatch,
+  probeDuration,
+  fetchTitle,
+  WATCH_SEG_S,
+  type WatchState,
+  type WatchCue,
+  type WatchLlmFn,
+} from './watch';
 
-export type JobStep = 'plan' | 'repair' | 'glossary' | 'translate' | 'assemble';
+export type JobStep = 'plan' | 'repair' | 'glossary' | 'translate' | 'watch' | 'assemble';
 export interface JobMsg {
   videoId: string;
   step: JobStep;
   batch?: number;
   force?: boolean;
+  route?: 'video'; // plan 專用：走看片路線（無此欄位 = text）
 }
 
 // 一個 queue 批次步驟最多帶幾個 chunk（chunk=40 句）：4×40=160 句、併發 4，約 1–2 分鐘
@@ -47,8 +64,9 @@ export interface JobStatus {
   step?: string; // 例 "3/7"
   startedAt: string;
   updatedAt: string;
-  sourceUploaded: string; // 本輪對應的 source.json 版本（uploaded ISO）— 一切冪等判斷的錨點
-  route: 'text';
+  // 本輪對應的輸入版本（text=source.json、video=watch.json 的 uploaded ISO）— 一切冪等判斷的錨點
+  sourceUploaded: string;
+  route: 'text' | 'video';
   repairBatches: number;
   translateBatches: number | null; // 修稿後才知道（空句會被移除）
   tokensUsed: number;
@@ -58,10 +76,13 @@ export interface JobStatus {
   warnings: string[];
   failed?: boolean;
   failReason?: string;
+  // video 路由專用：分段掃描狀態（kvsplayer 的失敗階梯/覆蓋接續都在這）
+  watch?: WatchState;
+  title?: string;
 }
 
 export interface QueueLike {
-  send(msg: JobMsg): Promise<unknown>;
+  send(msg: JobMsg, opts?: { delaySeconds?: number }): Promise<unknown>;
 }
 
 export interface JobEnv {
@@ -69,8 +90,18 @@ export interface JobEnv {
   JOBS?: QueueLike;
   GEMINI_API_KEY?: string;
   GEMINI_MODEL?: string;
-  VIDEO_TOKEN_CAP?: string; // 每片 token 上限（保險絲第 3 層），預設 500k
+  GEMINI_MEDIA_RES?: string; // 看片解析度，預設 MEDIA_RESOLUTION_MEDIUM（LOW 省 4 倍但字卡辨識差）
+  VIDEO_TOKEN_CAP?: string; // text 路由每片 token 上限（保險絲第 3 層），預設 500k
+  WATCH_TOKEN_CAP?: string; // video 路由每片上限，預設 3M（看片 ≈ 300 tok/秒，30 分鐘 ≈ 54 萬 + 重試餘裕）
   DAILY_TOKEN_CAP?: string; // 每日全域 token 上限（第 4 層），預設 2M
+}
+
+// video 路由的 ingest 請求檔（admin 貼連結 / API 建立）
+export interface WatchRequest {
+  requestedAt: string;
+  durationMin?: number; // 使用者提供片長 → 關閉 open 模式（countTokens 估算會低估）
+  lang?: string; // 原文語言標籤，預設 ko
+  title?: string;
 }
 
 const num = (v: string | undefined, dflt: number): number => {
@@ -160,6 +191,7 @@ export interface StepResult {
   status: number;
   body: Record<string, unknown>;
   next?: JobMsg;
+  delaySeconds?: number; // next 的延遲投遞（看片失敗階梯的 30s 退避用）
 }
 
 interface PreDoc {
@@ -181,6 +213,227 @@ async function loadRun(
   if (!src) return { drop: 'source.json 消失' };
   return { st, src };
 }
+
+// --- video 路由（Gemini 看片）---
+
+async function loadVideoRun(
+  env: JobEnv,
+  videoId: string
+): Promise<{ st: JobStatus } | { restart: JobMsg } | { drop: string }> {
+  const st = await jsonGet<JobStatus>(env, statusKey(videoId));
+  const head = await env.SUBS.head(`subs/${videoId}/watch.json`);
+  if (!head) return { drop: 'watch.json 不存在' };
+  if (!st || st.failed) return { drop: st ? '已標記失敗，需 ?force=1 重啟' : '無 status，等看門狗重排' };
+  if (st.sourceUploaded !== head.uploaded.toISOString()) return { restart: { videoId, step: 'plan', route: 'video' } };
+  if (!st.watch) return { restart: { videoId, step: 'plan', route: 'video' } };
+  return { st };
+}
+
+async function planVideoStep(env: JobEnv, videoId: string, force: boolean): Promise<StepResult> {
+  const reqHead = await env.SUBS.head(`subs/${videoId}/watch.json`);
+  if (!reqHead) return { status: 404, body: { ok: false, error: 'watch.json 不存在，請先 POST /watch-job/{id}' } };
+  const req = (await jsonGet<WatchRequest>(env, `subs/${videoId}/watch.json`))!;
+  const sourceUploaded = reqHead.uploaded.toISOString();
+
+  if (!force) {
+    const bilHead = await env.SUBS.head(`subs/${videoId}/bilingual.json`);
+    if (bilHead && bilHead.uploaded >= reqHead.uploaded) {
+      const doc = await jsonGet<Record<string, unknown>>(env, `subs/${videoId}/bilingual.json`);
+      if (doc && doc.route === 'video') {
+        return { status: 200, body: { ok: true, cached: true, cueCount: (doc.cues as unknown[]).length } };
+      }
+    }
+    const st0 = await jsonGet<JobStatus>(env, statusKey(videoId));
+    if (
+      st0 &&
+      st0.sourceUploaded === sourceUploaded &&
+      !st0.failed &&
+      st0.stage !== 'done' &&
+      Date.now() - new Date(st0.updatedAt).getTime() < STALE_MS
+    ) {
+      return { status: 202, body: { ok: true, alreadyRunning: true, stage: st0.stage, step: st0.step } };
+    }
+  }
+
+  const parts = await env.SUBS.list({ prefix: `subs/${videoId}/parts/` });
+  for (const o of parts.objects) await env.SUBS.delete(o.key);
+
+  // 片長：使用者提供優先（可靠）；否則 countTokens 探測 + open 模式（掃到片尾偵測為止）
+  let duration_s: number;
+  let open: boolean;
+  if (req.durationMin && req.durationMin > 0) {
+    duration_s = Math.round(req.durationMin * 60);
+    open = false;
+  } else {
+    if (!env.GEMINI_API_KEY) return { status: 500, body: { ok: false, error: '未設定 GEMINI_API_KEY secret' } };
+    duration_s = await probeDuration(env.GEMINI_API_KEY, env.GEMINI_MODEL || 'gemini-3.5-flash', videoId);
+    open = true; // countTokens 會低估 → 開放式掃描
+  }
+
+  const title = req.title || (await fetchTitle(videoId)) || videoId;
+  const st: JobStatus = {
+    videoId,
+    stage: 'watch',
+    startedAt: new Date().toISOString(),
+    updatedAt: '',
+    sourceUploaded,
+    route: 'video',
+    repairBatches: 0,
+    translateBatches: null,
+    tokensUsed: 0,
+    llmCalls: 0,
+    retries: 0,
+    asrRepaired: 0,
+    warnings: [],
+    watch: initWatchState(duration_s, open),
+    title,
+  };
+  await writeStatus(env, st);
+  return {
+    status: 202,
+    body: { ok: true, planned: videoId, route: 'video', duration_s, segments: st.watch!.segments, open },
+    next: { videoId, step: 'watch' },
+  };
+}
+
+async function watchStep(env: JobEnv, videoId: string, watchOverride?: WatchLlmFn): Promise<StepResult> {
+  const run = await loadVideoRun(env, videoId);
+  if ('drop' in run) return { status: 200, body: { ok: false, dropped: run.drop } };
+  if ('restart' in run) return { status: 202, body: { ok: true, restarted: true }, next: run.restart };
+  const { st } = run;
+  const w = st.watch!;
+
+  const seg = nextSegment(w);
+  if (seg.pastEnd) return { status: 202, body: { ok: true }, next: { videoId, step: 'assemble' } };
+
+  const meter: StepMeter = { tokens: 0, calls: 0 };
+  const watchLlm =
+    watchOverride ??
+    makeGeminiWatch(
+      env.GEMINI_API_KEY!,
+      env.GEMINI_MODEL || 'gemini-3.5-flash',
+      env.GEMINI_MEDIA_RES || 'MEDIA_RESOLUTION_MEDIUM',
+      (n) => {
+        meter.tokens += n;
+      }
+    );
+  // 譯名表（頻道/genre 鎖定，跨片沿用 — kvsplayer 資產，M4 遷移時匯入 R2）
+  const glossaryObj = await env.SUBS.get(`glossary/watch-${(await jsonGet<WatchRequest>(env, `subs/${videoId}/watch.json`))?.lang || 'ko'}.json`);
+  const glossary = glossaryObj ? await glossaryObj.text() : '[]';
+
+  try {
+    meter.calls += 1;
+    const raw = await watchLlm({ videoId, startS: seg.startS, endS: seg.endS, glossary });
+    const cues = parseWatchOutput(raw, seg.startS, seg.endS);
+    await jsonPut(env, `subs/${videoId}/parts/watch_${String(seg.n).padStart(2, '0')}.json`, {
+      sourceUploaded: st.sourceUploaded,
+      cues,
+    });
+    const { ended } = advance(w, seg, cues);
+    st.stage = 'watch';
+    st.step = `${w.done_segments}/${w.segments}`;
+    await settle(env, st, meter);
+    return {
+      status: 202,
+      body: { ok: true, segment: seg.n, cues: cues.length, covered_s: w.covered_s },
+      next: ended ? { videoId, step: 'assemble' } : { videoId, step: 'watch' },
+    };
+  } catch (e) {
+    // 失敗階梯自己管重試（縮段/跳毒段/片尾偵測需要超過 3 次投遞的壽命），
+    // 一律 ack + 發新訊息；燒錢上限由 total_fails(60) 與 token 保險絲把守
+    const msg = e instanceof Error ? e.message : String(e);
+    const action = applyFailureLadder(w, msg);
+    st.stage = 'watch';
+    st.step = `${w.done_segments}/${w.segments}`;
+    await settle(env, st, meter);
+    if (action === 'fatal') {
+      await failStatus(env, videoId, `看片累計失敗超過 60 次：${msg}`);
+      return { status: 500, body: { ok: false, error: msg } };
+    }
+    return {
+      status: 202,
+      body: { ok: true, ladder: action, error: msg.slice(0, 120) },
+      next: { videoId, step: 'watch' },
+      delaySeconds: action === 'retry' ? 30 : 0,
+    };
+  }
+}
+
+async function assembleVideoStep(env: JobEnv, videoId: string, st: JobStatus): Promise<StepResult> {
+  const w = st.watch!;
+  const req = (await jsonGet<WatchRequest>(env, `subs/${videoId}/watch.json`))!;
+  const all: WatchCue[] = [];
+  for (let n = 0; n < w.done_segments; n++) {
+    const part = await jsonGet<{ sourceUploaded: string; cues: WatchCue[] }>(
+      env,
+      `subs/${videoId}/parts/watch_${String(n).padStart(2, '0')}.json`
+    );
+    // 被跳過的毒段沒有 part（容忍）；版本不符的略過
+    if (part && part.sourceUploaded === st.sourceUploaded) all.push(...part.cues);
+  }
+  const cues = sanitizeWatchCues(all);
+  if (cues.length === 0) throw new Error('看片結果 0 cues，無法組裝');
+
+  const warnings = [...st.warnings];
+  if (w.skipped.length > 0) warnings.push(`跳過 ${w.skipped.length} 個毒段（起點秒數：${w.skipped.join(', ')}）`);
+  const banned = [...new Set(cues.flatMap((c) => scanBanned(c.zh)))];
+  if (banned.length > 0) warnings.push(`禁用詞殘留：${banned.join('、')}`); // 看片重跑太貴，僅記錄不重試
+
+  const model = env.GEMINI_MODEL || 'gemini-3.5-flash';
+  const bilingual = {
+    videoId,
+    schema: 2,
+    meta: { title: st.title || videoId, channel: '', description: '', durationSec: w.duration_s },
+    sourceLang: req.lang || 'ko',
+    tier: 3,
+    route: 'video',
+    trust: 'model', // 時間軸為模型估算 — player 會提示
+    asrRepaired: 0,
+    model,
+    promptVersion: PROMPT_VERSION,
+    generatedAt: new Date().toISOString(),
+    warnings,
+    hints: [],
+    cues,
+  };
+  await jsonPut(env, `subs/${videoId}/bilingual.json`, bilingual);
+  await env.SUBS.put(
+    `subs/${videoId}/bilingual.srt`,
+    toSrt(cues.map((c) => ({ start: c.start, end: c.end, en: c.orig, zh: c.zh }))),
+    { httpMetadata: { contentType: 'text/plain; charset=utf-8' } }
+  );
+  await jsonPut(env, `subs/${videoId}/info.json`, {
+    videoId,
+    title: st.title || videoId,
+    channel: '',
+    durationSec: w.duration_s,
+    cueCount: cues.length,
+    generatedAt: bilingual.generatedAt,
+  });
+  const parts = await env.SUBS.list({ prefix: `subs/${videoId}/parts/` });
+  for (const o of parts.objects) await env.SUBS.delete(o.key);
+
+  st.stage = 'done';
+  st.step = undefined;
+  st.warnings = warnings;
+  await writeStatus(env, st);
+  return {
+    status: 200,
+    body: {
+      ok: true,
+      stats: {
+        cues: cues.length,
+        cards: cues.filter((c) => c.kind === 'card').length,
+        segments: w.done_segments,
+        skipped: w.skipped,
+        tokensUsed: st.tokensUsed,
+        warnings,
+      },
+    },
+  };
+}
+
+// --- text 路由 ---
 
 async function planStep(env: JobEnv, videoId: string, force: boolean): Promise<StepResult> {
   const model = env.GEMINI_MODEL || 'gemini-3.5-flash';
@@ -422,6 +675,14 @@ async function translateStep(env: JobEnv, videoId: string, batch: number, llmOve
 }
 
 async function assembleStep(env: JobEnv, videoId: string): Promise<StepResult> {
+  // video 路由的組裝走自己的邏輯（無 source.json）
+  const st0 = await jsonGet<JobStatus>(env, statusKey(videoId));
+  if (st0?.route === 'video') {
+    const vrun = await loadVideoRun(env, videoId);
+    if ('drop' in vrun) return { status: 200, body: { ok: false, dropped: vrun.drop } };
+    if ('restart' in vrun) return { status: 202, body: { ok: true, restarted: true }, next: vrun.restart };
+    return assembleVideoStep(env, videoId, vrun.st);
+  }
   const run = await loadRun(env, videoId);
   if ('drop' in run) return { status: 200, body: { ok: false, dropped: run.drop } };
   if ('restart' in run) return { status: 202, body: { ok: true, restarted: true }, next: run.restart };
@@ -518,16 +779,25 @@ async function assembleStep(env: JobEnv, videoId: string): Promise<StepResult> {
 
 // --- 步驟分派 ---
 
-export async function runStep(env: JobEnv, msg: JobMsg, llmOverride?: LlmFn): Promise<StepResult> {
+export async function runStep(
+  env: JobEnv,
+  msg: JobMsg,
+  llmOverride?: LlmFn,
+  watchOverride?: WatchLlmFn
+): Promise<StepResult> {
   switch (msg.step) {
     case 'plan':
-      return planStep(env, msg.videoId, msg.force === true);
+      return msg.route === 'video'
+        ? planVideoStep(env, msg.videoId, msg.force === true)
+        : planStep(env, msg.videoId, msg.force === true);
     case 'repair':
       return repairStep(env, msg.videoId, msg.batch ?? 0, llmOverride);
     case 'glossary':
       return glossaryStep(env, msg.videoId, llmOverride);
     case 'translate':
       return translateStep(env, msg.videoId, msg.batch ?? 0, llmOverride);
+    case 'watch':
+      return watchStep(env, msg.videoId, watchOverride);
     case 'assemble':
       return assembleStep(env, msg.videoId);
   }
@@ -542,16 +812,17 @@ export interface MsgLike {
   retry(opts?: { delaySeconds?: number }): void;
 }
 
-const LLM_STEPS: ReadonlySet<JobStep> = new Set(['repair', 'glossary', 'translate']);
+const LLM_STEPS: ReadonlySet<JobStep> = new Set(['repair', 'glossary', 'translate', 'watch']);
 
-export async function handleJob(msg: MsgLike, env: JobEnv, llmOverride?: LlmFn): Promise<void> {
+export async function handleJob(msg: MsgLike, env: JobEnv, llmOverride?: LlmFn, watchOverride?: WatchLlmFn): Promise<void> {
   const { videoId, step } = msg.body;
   try {
     if (LLM_STEPS.has(step)) {
-      if (!llmOverride && !env.GEMINI_API_KEY) throw new Error('未設定 GEMINI_API_KEY secret');
+      if (!llmOverride && !watchOverride && !env.GEMINI_API_KEY) throw new Error('未設定 GEMINI_API_KEY secret');
       const st = await jsonGet<JobStatus>(env, statusKey(videoId));
       // 保險絲第 3 層：每片 token 上限 → 永久失敗（只有 ?force=1 能重啟）
-      const videoCap = num(env.VIDEO_TOKEN_CAP, 500_000);
+      // 看片路線成本高 ~30 倍，用獨立的較高上限
+      const videoCap = st?.route === 'video' ? num(env.WATCH_TOKEN_CAP, 3_000_000) : num(env.VIDEO_TOKEN_CAP, 500_000);
       if (st && st.tokensUsed >= videoCap) {
         await failStatus(env, videoId, `token 用量 ${st.tokensUsed} 超過每片上限 ${videoCap}`);
         msg.ack();
@@ -570,8 +841,8 @@ export async function handleJob(msg: MsgLike, env: JobEnv, llmOverride?: LlmFn):
         return;
       }
     }
-    const r = await runStep(env, msg.body, llmOverride);
-    if (r.next && env.JOBS) await env.JOBS.send(r.next);
+    const r = await runStep(env, msg.body, llmOverride, watchOverride);
+    if (r.next && env.JOBS) await env.JOBS.send(r.next, r.delaySeconds ? { delaySeconds: r.delaySeconds } : undefined);
     msg.ack();
   } catch (e) {
     const reason = e instanceof Error ? e.message : String(e);
@@ -608,22 +879,28 @@ export async function watchdog(env: JobEnv): Promise<{ scanned: number; enqueued
     if (!/^[A-Za-z0-9_-]{11}$/.test(videoId)) continue;
     scanned++;
 
+    // 錨點：text=source.json、video=watch.json；兩者都有時取較新的那個當本輪輸入
     const srcHead = await env.SUBS.head(`subs/${videoId}/source.json`);
-    if (!srcHead) continue;
+    const watchHead = await env.SUBS.head(`subs/${videoId}/watch.json`);
+    const isVideo = !!watchHead && (!srcHead || watchHead.uploaded > srcHead.uploaded);
+    const anchor = isVideo ? watchHead : srcHead;
+    if (!anchor) continue;
     const bilHead = await env.SUBS.head(`subs/${videoId}/bilingual.json`);
-    if (bilHead && bilHead.uploaded >= srcHead.uploaded) continue; // 已是最新
+    if (bilHead && bilHead.uploaded >= anchor.uploaded) continue; // 已是最新
 
     const st = await jsonGet<JobStatus>(env, statusKey(videoId));
-    if (st && st.sourceUploaded === srcHead.uploaded.toISOString()) {
+    if (st && st.sourceUploaded === anchor.uploaded.toISOString()) {
       if (st.failed) continue; // 永久失敗，等人工 force
       if (Date.now() - new Date(st.updatedAt).getTime() < STALE_MS) continue; // run 還活著
       if (st.stage === 'paused' && st.updatedAt.slice(0, 10) === new Date().toISOString().slice(0, 10)) continue; // 日預算用完，今天不用再試
     }
 
-    const src = await jsonGet<SourceDoc>(env, `subs/${videoId}/source.json`);
-    if (!src || routeSource(src).route === 'reject') continue;
+    if (!isVideo) {
+      const src = await jsonGet<SourceDoc>(env, `subs/${videoId}/source.json`);
+      if (!src || routeSource(src).route === 'reject') continue;
+    }
 
-    await env.JOBS.send({ videoId, step: 'plan' });
+    await env.JOBS.send({ videoId, step: 'plan', ...(isVideo ? { route: 'video' as const } : {}) });
     enqueued.push(videoId);
   }
   return { scanned, enqueued };
@@ -635,12 +912,14 @@ export async function runPipeline(
   env: JobEnv,
   videoId: string,
   force: boolean,
-  llmOverride?: LlmFn
+  llmOverride?: LlmFn,
+  route?: 'video',
+  watchOverride?: WatchLlmFn
 ): Promise<{ status: number; body: Record<string, unknown> }> {
-  let msg: JobMsg | undefined = { videoId, step: 'plan', force };
+  let msg: JobMsg | undefined = { videoId, step: 'plan', force, ...(route ? { route } : {}) };
   let last: StepResult = { status: 500, body: { ok: false, error: '未執行任何步驟' } };
   for (let guard = 0; msg && guard < 200; guard++) {
-    last = await runStep(env, msg, llmOverride);
+    last = await runStep(env, msg, llmOverride, watchOverride);
     msg = last.next;
   }
   return { status: last.status, body: last.body };
