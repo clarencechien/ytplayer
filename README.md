@@ -14,28 +14,32 @@
 
 Caption track 有四個層級，每層是不同的題目（詳見 [docs/handoff-append-01.md](docs/handoff-append-01.md)）：
 
-| Tier | 定義 | 判別 | 解法 | 歸屬 |
-|---|---|---|---|---|
-| **1** | 創作者自製多語言（有人工 zh-TW/zh-Hant 軌） | 存在非 ASR 的 zh 軌 | 預設用 YouTube 原生；**不滿意時 ingest 原文軌即重做** | ytplayer |
-| **2** | 創作者自製原文 CC | 非 ASR、僅原文 | 斷句 → glossary → 分塊翻譯（主路徑） | ytplayer |
-| **3**（英文） | 僅自動字幕 ASR | `kind==='asr'` / `vssId` 前綴 `a.` | 先 LLM 修稿再進 Tier 2 流程（Phase 2.5） | ytplayer |
-| **3**（非英文） | 僅 ASR，日/韓等 | 同上 | 轉寫不可信，唯一划算的是 **LLM 看片路線** | **kvsplayer** |
-| **4** | 無任何 CC | captionTracks 空 | 直接報錯 | —（或看片路線） |
+| Tier | 定義 | 判別 | 路由 |
+|---|---|---|---|
+| **1** | 創作者自製多語言（有人工 zh-TW/zh-Hant 軌） | 存在非 ASR 的 zh 軌 | 預設用 YouTube 原生；**不滿意時 ingest 原文軌即重做**（`text`） |
+| **2** | 創作者自製原文 CC | 非 ASR、僅原文 | `text`：斷句 → glossary → 分塊翻譯（主路徑） |
+| **3**（ASR） | 僅自動字幕 | `kind==='asr'` / `vssId` 前綴 `a.` | `text`：先 LLM 修稿再翻。**各語言開放**（[實測依據](docs/asr-language-experiment.md)），韓文除外 |
+| **3**（字卡型） | ASR 有，但畫面字卡承載語意（韓綜） | 人工判斷 | `video`：Gemini 看片（kvsplayer 移植，M3） |
+| **4** | 無任何 CC | captionTracks 空 | `video`（唯一選項，M3） |
 
-實作上可譯性判準**看「被 ingest 的軌」不看 tier**：中文軌拒收、人工原文軌不分語言可翻、ASR 僅限英文。
-紅線：YouTube 自動翻譯軌（`tlang`）永不作為輸入。
+路由判準**看「被 ingest 的軌」不看 tier**：中文軌拒收、人工原文軌不分語言可翻、ASR 除韓文外開放。
+紅線：YouTube 自動翻譯軌（`tlang`）永不作為輸入。kvsplayer 合併進行中，見 [docs/migration.md](docs/migration.md)。
 
 ## 使用流程（日常）
 
 1. YouTube 開影片 → 播放器開 CC 選**原文**軌 → 點 ext 圖示 → 送出
-2. 完事。cron 每 5 分鐘自動翻（單支 1–2 分鐘），popup 給的 `/watch` 連結過幾分鐘自己出現字幕
+2. 完事。ingest 即排入 Queues 分步翻譯（進度在 `/subs/{id}/status.json`，player 頁會顯示），
+   popup 給的 `/watch` 連結幾分鐘後自己出現字幕
 3. 重翻：再 ingest 一次（source 變新即自動重翻）；改 prompt 後重跑：`POST /translate/{id}?force=1`
+   （`force` 也是唯一能重啟「已標記失敗」影片的方式 — 連續失敗 3 次會永久停，防燒錢）
 
 ## 現況
 
-MVP 完整可用：ingest → （英文 ASR 修稿）→ glossary → 分塊翻譯 → deterministic 驗證/fail-fast → 自動譯註 → player。
-prompt 目前 **v4**；worker 測試 63 個。品質防線與所有實證教訓見 **[docs/lessons-learned.md](docs/lessons-learned.md)**。
-kvsplayer 合併與否的分析（架構差異 / ADR / go–no-go）見 **[docs/kvsplayer-merge-todo.md](docs/kvsplayer-merge-todo.md)**。
+MVP 完整可用：ingest → （ASR 修稿）→ glossary → 分塊翻譯 → deterministic 驗證/fail-fast → 自動譯註 → player。
+執行架構：**Queues 分步自我續鏈**（每步落地 checkpoint、3 次重試後永久失敗、每片與每日 token
+上限雙保險），cron 為零成本看門狗 —— 設計脈絡見 **[docs/migration.md](docs/migration.md)**。
+prompt 目前 **v4**；worker 測試 70 個。品質防線與所有實證教訓見 **[docs/lessons-learned.md](docs/lessons-learned.md)**。
+kvsplayer 合併（決策 A，進行中）見 **[docs/kvsplayer-merge-todo.md](docs/kvsplayer-merge-todo.md)**、
 非英文 ASR 可信度實測見 **[docs/asr-language-experiment.md](docs/asr-language-experiment.md)**。
 
 ### Player 操作（與 YouTube 慣例一致）

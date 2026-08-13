@@ -47,7 +47,7 @@ function computeTier(tracks) {
 const TIER_MSG = {
   1: '創作者已提供繁中字幕 — 不滿意的話，選「原文」軌送出就會重新翻譯一份',
   2: '有人工原文 CC — 主路徑，送出後自動翻譯',
-  3: '只有自動字幕（ASR）— 英文會先修稿再翻譯；非英文 ASR 不支援',
+  3: '只有自動字幕（ASR）— 會先修稿再翻譯（各語言開放；韓文請走看片路線）',
   4: '沒有任何 caption track，無法處理',
 };
 
@@ -164,10 +164,10 @@ async function main() {
       const watchUrl = `${cfg.workerUrl}/watch/${state.urlVideoId}`;
       result.innerHTML = `<span class="ok">✅ 已存入 ${esc(out.key)}（${out.cueCount} cues）</span>` +
         (out.warning ? `<div class="warn">⚠ ${esc(out.warning)}</div>` : '') +
-        (cap.kind !== 'asr' || /^en/i.test(cap.lang)
-          ? `<div class="hint">已排入翻譯佇列（cron 每 5 分鐘自動跑，單支約 1–2 分鐘）。到 player 頁看：<br>
-             <a href="${esc(watchUrl)}" target="_blank" style="color:#59f">${esc(watchUrl)}</a>（翻好前會自動重試）</div>`
-          : `<div class="hint">非英文 ASR 只 ingest 不翻譯</div>`);
+        (out.route !== 'reject'
+          ? `<div class="hint">已排入翻譯佇列（幾分鐘內自動翻好）。到 player 頁看：<br>
+             <a href="${esc(watchUrl)}" target="_blank" style="color:#59f">${esc(watchUrl)}</a>（翻好前會自動重試並顯示進度）</div>`
+          : `<div class="hint">只 ingest 不翻譯：${esc(out.reason ?? '')}</div>`);
     } catch (e) {
       let msg = String(e.message ?? e);
       if (/failed to fetch/i.test(msg)) {

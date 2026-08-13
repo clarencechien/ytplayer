@@ -167,6 +167,7 @@ export function watchPage(videoId: string): string {
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex">
 <title>ytplayer</title>
 <style>${STYLE}</style>
 </head>
@@ -397,8 +398,16 @@ function fmtTime(t) {
 function load() {
   fetch("/subs/" + VID + "/bilingual.json").then(function (r) {
     if (!r.ok) {
-      list.innerHTML = '<div class="msg">這支影片的翻譯還沒好（cron 每 5 分鐘自動跑）。此頁會自動重試…<br>' +
-        '還沒 ingest 的話：到 YouTube 開這支影片 → 開 CC 選原文軌 → 點 ext 送出。</div>';
+      // 還沒翻好：顯示 job 進度（status.json 每步更新），此頁自動重試
+      fetch("/subs/" + VID + "/status.json").then(function (s) { return s.ok ? s.json() : null; })
+        .catch(function () { return null; })
+        .then(function (st) {
+          var msg = '這支影片的翻譯還沒好。此頁會自動重試…';
+          if (st && st.failed) msg = '⚠ 翻譯失敗：' + (st.failReason || '未知原因') + '<br>可用 /translate/' + VID + '?force=1 重跑。';
+          else if (st && st.stage) msg = '翻譯中：' + st.stage + (st.step ? '（' + st.step + '）' : '') + '。此頁會自動重試…';
+          else msg += '<br>還沒 ingest 的話：到 YouTube 開這支影片 → 開 CC 選原文軌 → 點 ext 送出。';
+          list.innerHTML = '<div class="msg">' + msg + '</div>';
+        });
       setTimeout(load, 20000);
       return;
     }
@@ -408,6 +417,8 @@ function load() {
 
 function init(doc) {
   cues = doc.cues || [];
+  // schema v2 用 orig 取代 en（kvsplayer 合併後 ko/ja/en 通用）；v1 舊資料照舊
+  cues.forEach(function (c) { if (c.en == null && c.orig != null) c.en = c.orig; });
   document.getElementById("title").textContent = doc.meta && doc.meta.title || VID;
   document.getElementById("meta").textContent =
     (doc.meta && doc.meta.channel || "") + "・" + cues.length + " 句・" + (doc.model || "") +
@@ -472,6 +483,7 @@ export function indexPage(): string {
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex">
 <title>ytplayer — 影片清單</title>
 <style>${STYLE}
   #videos { max-width: 720px; margin: 0 auto; width: 100%; overflow-y: auto; padding: 8px 0; }

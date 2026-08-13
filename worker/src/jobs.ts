@@ -1,0 +1,647 @@
+// Queues 任務系統（migration.md §2–§3）：pipeline 拆成有界小步，每步做完即落地 checkpoint。
+//
+// 設計原則（成本事故的直接教訓，見 asr-language-experiment.md §4.2）：
+//   1. 無人看管的組件（cron、queue retry）單次決策成本為零 — 花錢步驟一律過保險絲
+//   2. 先存檔後花更多錢：每步 1–2 分鐘內完成並寫 R2，被砍只損失一步
+//   3. 失敗必須可見：status.json 開工即寫、每步更新
+//   4. 重試必須有界：每步 3 次（Queues max_retries）→ 永久標記失敗，只有 ?force=1 能重啟
+//
+// 步驟鏈：plan → [repair:0..R-1] → glossary → translate:0..T-1 → assemble
+// 每步冪等：輸出已存在（且對應同一版 source）就跳過工作直接接鏈，斷鏈由 cron 看門狗補。
+
+import { segmentCues, type Sentence } from './segment';
+import type { LlmFn } from './llm';
+import { PROMPT_VERSION, buildGlossaryPrompt } from './prompts';
+import {
+  chunkSentences,
+  repairChunk,
+  translateChunk,
+  cleanAsrText,
+  cleanJson,
+  assembleBilingual,
+  attachGlossaryNotes,
+  toSrt,
+  routeSource,
+  type SourceDoc,
+  type GlossaryEntry,
+  type BilingualCue,
+  type PipelineStats,
+} from './pipeline';
+
+export type JobStep = 'plan' | 'repair' | 'glossary' | 'translate' | 'assemble';
+export interface JobMsg {
+  videoId: string;
+  step: JobStep;
+  batch?: number;
+  force?: boolean;
+}
+
+// 一個 queue 批次步驟最多帶幾個 chunk（chunk=40 句）：4×40=160 句、併發 4，約 1–2 分鐘
+const CHUNKS_PER_BATCH = 4;
+// status.updatedAt 超過此值視為斷鏈（run 死了），看門狗才會重新 enqueue plan
+export const STALE_MS = 10 * 60 * 1000;
+
+export interface JobStatus {
+  videoId: string;
+  stage: JobStep | 'done' | 'failed' | 'paused';
+  step?: string; // 例 "3/7"
+  startedAt: string;
+  updatedAt: string;
+  sourceUploaded: string; // 本輪對應的 source.json 版本（uploaded ISO）— 一切冪等判斷的錨點
+  route: 'text';
+  repairBatches: number;
+  translateBatches: number | null; // 修稿後才知道（空句會被移除）
+  tokensUsed: number;
+  llmCalls: number;
+  retries: number;
+  asrRepaired: number;
+  warnings: string[];
+  failed?: boolean;
+  failReason?: string;
+}
+
+export interface QueueLike {
+  send(msg: JobMsg): Promise<unknown>;
+}
+
+export interface JobEnv {
+  SUBS: R2Bucket;
+  JOBS?: QueueLike;
+  GEMINI_API_KEY?: string;
+  GEMINI_MODEL?: string;
+  VIDEO_TOKEN_CAP?: string; // 每片 token 上限（保險絲第 3 層），預設 500k
+  DAILY_TOKEN_CAP?: string; // 每日全域 token 上限（第 4 層），預設 2M
+}
+
+const num = (v: string | undefined, dflt: number): number => {
+  const n = Number(v);
+  return Number.isFinite(n) && n > 0 ? n : dflt;
+};
+
+const jsonPut = (env: JobEnv, key: string, value: unknown): Promise<unknown> =>
+  env.SUBS.put(key, JSON.stringify(value), { httpMetadata: { contentType: 'application/json' } });
+
+const jsonGet = async <T>(env: JobEnv, key: string): Promise<T | null> => {
+  const obj = await env.SUBS.get(key);
+  return obj ? (JSON.parse(await obj.text()) as T) : null;
+};
+
+// --- 全域日預算（保險絲第 4 層）---
+// R2 read-modify-write 沒有原子性，併發下會少算 — 保險絲是近似值可接受（寧可少算被
+// Google 端配額接住，也不引入 DO/KV 依賴）。
+const budgetKey = (): string => `budget/${new Date().toISOString().slice(0, 10)}.json`;
+
+export async function readDailyBudget(env: JobEnv): Promise<{ tokens: number; calls: number }> {
+  return (await jsonGet<{ tokens: number; calls: number }>(env, budgetKey())) ?? { tokens: 0, calls: 0 };
+}
+
+async function addDailyBudget(env: JobEnv, tokens: number, calls: number): Promise<void> {
+  if (tokens === 0 && calls === 0) return;
+  const b = await readDailyBudget(env);
+  await jsonPut(env, budgetKey(), { tokens: b.tokens + tokens, calls: b.calls + calls, updatedAt: new Date().toISOString() });
+}
+
+// --- status ---
+
+const statusKey = (id: string): string => `subs/${id}/status.json`;
+
+async function writeStatus(env: JobEnv, st: JobStatus): Promise<void> {
+  st.updatedAt = new Date().toISOString();
+  await jsonPut(env, statusKey(st.videoId), st);
+}
+
+async function failStatus(env: JobEnv, videoId: string, reason: string): Promise<void> {
+  const st = await jsonGet<JobStatus>(env, statusKey(videoId));
+  if (!st) return;
+  st.stage = 'failed';
+  st.failed = true;
+  st.failReason = reason;
+  await writeStatus(env, st);
+}
+
+// --- 每步的 LLM 包裝：呼叫上限（防單步失控）+ token/call 計數（餵保險絲）---
+
+interface StepMeter {
+  tokens: number;
+  calls: number;
+}
+
+function makeStepLlm(
+  env: JobEnv,
+  meter: StepMeter,
+  maxCalls: number,
+  llmOverride?: LlmFn
+): LlmFn {
+  const model = env.GEMINI_MODEL || 'gemini-3.5-flash';
+  const onTokens = (n: number): void => {
+    meter.tokens += n;
+  };
+  return async (prompt) => {
+    if (++meter.calls > maxCalls) throw new Error(`單步 LLM 呼叫超過上限 ${maxCalls} 次，中止（防重試失控）`);
+    if (llmOverride) return llmOverride(prompt);
+    const { geminiGenerate } = await import('./llm');
+    return geminiGenerate(env.GEMINI_API_KEY!, model, prompt, onTokens);
+  };
+}
+
+// 步驟收尾：把本步的計量寫進 status 與日預算
+async function settle(env: JobEnv, st: JobStatus, meter: StepMeter, retries = 0, asrRepaired = 0): Promise<void> {
+  st.tokensUsed += meter.tokens;
+  st.llmCalls += meter.calls;
+  st.retries += retries;
+  st.asrRepaired += asrRepaired;
+  await writeStatus(env, st);
+  await addDailyBudget(env, meter.tokens, meter.calls);
+}
+
+// --- 各步驟 ---
+
+export interface StepResult {
+  status: number;
+  body: Record<string, unknown>;
+  next?: JobMsg;
+}
+
+interface PreDoc {
+  sourceUploaded: string;
+  sentences: Sentence[];
+}
+
+async function loadRun(
+  env: JobEnv,
+  videoId: string
+): Promise<{ st: JobStatus; src: SourceDoc } | { restart: JobMsg } | { drop: string }> {
+  const st = await jsonGet<JobStatus>(env, statusKey(videoId));
+  const head = await env.SUBS.head(`subs/${videoId}/source.json`);
+  if (!head) return { drop: 'source.json 不存在' };
+  if (!st || st.failed) return { drop: st ? '已標記失敗，需 ?force=1 重啟' : '無 status，等看門狗重排' };
+  // source 在跑到一半時被重新 ingest → 這輪作廢，重新計畫
+  if (st.sourceUploaded !== head.uploaded.toISOString()) return { restart: { videoId, step: 'plan' } };
+  const src = await jsonGet<SourceDoc>(env, `subs/${videoId}/source.json`);
+  if (!src) return { drop: 'source.json 消失' };
+  return { st, src };
+}
+
+async function planStep(env: JobEnv, videoId: string, force: boolean): Promise<StepResult> {
+  const model = env.GEMINI_MODEL || 'gemini-3.5-flash';
+  const srcHead = await env.SUBS.head(`subs/${videoId}/source.json`);
+  if (!srcHead) return { status: 404, body: { ok: false, error: 'source.json 不存在，請先用 ext ingest' } };
+  const src = await jsonGet<SourceDoc>(env, `subs/${videoId}/source.json`);
+  if (!src) return { status: 404, body: { ok: false, error: 'source.json 不存在' } };
+
+  const { route, reason } = routeSource(src);
+  if (route === 'reject') return { status: 422, body: { ok: false, error: `不在範圍：${reason}` } };
+
+  const sourceUploaded = srcHead.uploaded.toISOString();
+
+  // cache：同 (source 版本, lang, model, promptVersion) 直接視為完成
+  if (!force) {
+    const bilHead = await env.SUBS.head(`subs/${videoId}/bilingual.json`);
+    if (bilHead && bilHead.uploaded >= srcHead.uploaded) {
+      const doc = await jsonGet<Record<string, unknown>>(env, `subs/${videoId}/bilingual.json`);
+      if (doc && doc.promptVersion === PROMPT_VERSION && doc.model === model && doc.sourceLang === src.track.languageCode) {
+        return { status: 200, body: { ok: true, cached: true, cueCount: (doc.cues as unknown[]).length } };
+      }
+    }
+    // 防重複開工：同版 source 的 run 還活著（10 分鐘內有更新）就不再排
+    const st = await jsonGet<JobStatus>(env, statusKey(videoId));
+    if (
+      st &&
+      st.sourceUploaded === sourceUploaded &&
+      !st.failed &&
+      st.stage !== 'done' &&
+      Date.now() - new Date(st.updatedAt).getTime() < STALE_MS
+    ) {
+      return { status: 202, body: { ok: true, alreadyRunning: true, stage: st.stage, step: st.step } };
+    }
+  }
+
+  // 開新一輪：舊 checkpoint 一律清掉（force 重跑、或 source 換版）
+  const parts = await env.SUBS.list({ prefix: `subs/${videoId}/parts/` });
+  for (const o of parts.objects) await env.SUBS.delete(o.key);
+
+  const needRepair = src.track.kind === 'asr';
+  const sentences = segmentCues(src.cues);
+  if (sentences.length === 0) return { status: 422, body: { ok: false, error: '沒有可翻譯的句子' } };
+  const chunkCount = chunkSentences(sentences).length;
+
+  const st: JobStatus = {
+    videoId,
+    stage: needRepair ? 'repair' : 'glossary',
+    startedAt: new Date().toISOString(),
+    updatedAt: '',
+    sourceUploaded,
+    route: 'text',
+    repairBatches: needRepair ? Math.ceil(chunkCount / CHUNKS_PER_BATCH) : 0,
+    translateBatches: needRepair ? null : Math.ceil(chunkCount / CHUNKS_PER_BATCH),
+    tokensUsed: 0,
+    llmCalls: 0,
+    retries: 0,
+    asrRepaired: 0,
+    warnings: [],
+  };
+
+  if (needRepair) {
+    await jsonPut(env, `subs/${videoId}/parts/pre.json`, { sourceUploaded, sentences } satisfies PreDoc);
+  } else {
+    await jsonPut(env, `subs/${videoId}/sentences.json`, { videoId, asrRepaired: 0, sentences, sourceUploaded });
+  }
+  await writeStatus(env, st);
+  return {
+    status: 202,
+    body: { ok: true, planned: videoId, repairBatches: st.repairBatches, chunks: chunkCount },
+    next: needRepair ? { videoId, step: 'repair', batch: 0 } : { videoId, step: 'glossary' },
+  };
+}
+
+async function repairStep(env: JobEnv, videoId: string, batch: number, llmOverride?: LlmFn): Promise<StepResult> {
+  const run = await loadRun(env, videoId);
+  if ('drop' in run) return { status: 200, body: { ok: false, dropped: run.drop } };
+  if ('restart' in run) return { status: 202, body: { ok: true, restarted: true }, next: run.restart };
+  const { st, src } = run;
+
+  const nextMsg = (b: number): JobMsg =>
+    b + 1 < st.repairBatches ? { videoId, step: 'repair', batch: b + 1 } : { videoId, step: 'glossary' };
+  const partKey = `subs/${videoId}/parts/repair_${batch}.json`;
+
+  // 冪等：這批已修完（同版 source）→ 直接接鏈
+  const existing = await jsonGet<{ sourceUploaded: string }>(env, partKey);
+  if (existing && existing.sourceUploaded === st.sourceUploaded) {
+    return { status: 200, body: { ok: true, skipped: `repair ${batch} 已存在` }, next: nextMsg(batch) };
+  }
+
+  const pre = await jsonGet<PreDoc>(env, `subs/${videoId}/parts/pre.json`);
+  if (!pre || pre.sourceUploaded !== st.sourceUploaded) {
+    return { status: 202, body: { ok: true, restarted: true }, next: { videoId, step: 'plan' } };
+  }
+  const chunks = chunkSentences(pre.sentences).slice(batch * CHUNKS_PER_BATCH, (batch + 1) * CHUNKS_PER_BATCH);
+
+  const meter: StepMeter = { tokens: 0, calls: 0 };
+  const llm = makeStepLlm(env, meter, chunks.length * 3 + 2, llmOverride);
+  let retries = 0;
+  const entries: Array<[number, string]> = [];
+  const outcomes = await Promise.all(chunks.map((c) => repairChunk(llm, src.meta, c, src.track.languageCode)));
+  for (const o of outcomes) {
+    retries += o.retries;
+    for (const [id, en] of o.byId) entries.push([id, en]);
+  }
+  await jsonPut(env, partKey, { sourceUploaded: st.sourceUploaded, entries, retries });
+
+  st.stage = 'repair';
+  st.step = `${batch + 1}/${st.repairBatches}`;
+  await settle(env, st, meter, retries);
+  return { status: 202, body: { ok: true, repaired: entries.length }, next: nextMsg(batch) };
+}
+
+async function glossaryStep(env: JobEnv, videoId: string, llmOverride?: LlmFn): Promise<StepResult> {
+  const run = await loadRun(env, videoId);
+  if ('drop' in run) return { status: 200, body: { ok: false, dropped: run.drop } };
+  if ('restart' in run) return { status: 202, body: { ok: true, restarted: true }, next: run.restart };
+  const { st, src } = run;
+
+  // 修稿路線：先把 repair parts 合併成最終 sentences.json（deterministic、零 LLM、冪等）
+  let asrRepairedDelta = 0;
+  let sentencesDoc = await jsonGet<{ sentences: Sentence[]; sourceUploaded?: string; asrRepaired: number }>(
+    env,
+    `subs/${videoId}/sentences.json`
+  );
+  if (st.repairBatches > 0 && (!sentencesDoc || sentencesDoc.sourceUploaded !== st.sourceUploaded)) {
+    const pre = await jsonGet<PreDoc>(env, `subs/${videoId}/parts/pre.json`);
+    if (!pre || pre.sourceUploaded !== st.sourceUploaded) {
+      return { status: 202, body: { ok: true, restarted: true }, next: { videoId, step: 'plan' } };
+    }
+    const fixedById = new Map<number, string>();
+    for (let b = 0; b < st.repairBatches; b++) {
+      const part = await jsonGet<{ sourceUploaded: string; entries: Array<[number, string]> }>(
+        env,
+        `subs/${videoId}/parts/repair_${b}.json`
+      );
+      if (!part || part.sourceUploaded !== st.sourceUploaded) throw new Error(`repair part ${b} 缺失，無法合併`);
+      for (const [id, en] of part.entries) fixedById.set(id, en);
+    }
+    let asrRepaired = 0;
+    const sentences = pre.sentences.flatMap((s) => {
+      const cleaned = cleanAsrText(fixedById.get(s.id) ?? s.text);
+      if (!cleaned) {
+        asrRepaired++;
+        return [];
+      }
+      if (cleaned !== s.text) asrRepaired++;
+      return [{ ...s, text: cleaned }];
+    });
+    if (sentences.length === 0) throw new Error('修稿後沒有剩下任何句子');
+    sentencesDoc = { videoId: videoId as never, asrRepaired, sentences, sourceUploaded: st.sourceUploaded } as never;
+    await jsonPut(env, `subs/${videoId}/sentences.json`, sentencesDoc);
+    asrRepairedDelta = asrRepaired;
+  }
+  if (!sentencesDoc) return { status: 202, body: { ok: true, restarted: true }, next: { videoId, step: 'plan' } };
+  const sentences = sentencesDoc.sentences;
+  st.translateBatches = Math.ceil(chunkSentences(sentences).length / CHUNKS_PER_BATCH);
+
+  const model = env.GEMINI_MODEL || 'gemini-3.5-flash';
+  const meter: StepMeter = { tokens: 0, calls: 0 };
+  let retries = 0;
+
+  // 冪等：glossary 已是本輪產物就不重打
+  const existing = await jsonGet<{ sourceUploaded?: string }>(env, `subs/${videoId}/glossary.json`);
+  if (!existing || existing.sourceUploaded !== st.sourceUploaded) {
+    const llm = makeStepLlm(env, meter, 4, llmOverride);
+    let glossary: GlossaryEntry[] = [];
+    for (let attempt = 0; attempt < 2; attempt++) {
+      try {
+        const parsed = cleanJson(await llm(buildGlossaryPrompt(src.meta, sentences, src.track.languageCode)));
+        if (!Array.isArray(parsed)) throw new Error('glossary 不是陣列');
+        glossary = parsed
+          .map((g): Partial<GlossaryEntry> => ({
+            term: g?.term,
+            zh: g?.zh ?? g?.suggested_zh, // 舊 schema 相容
+            note: typeof g?.note === 'string' && g.note.trim() ? g.note.trim().slice(0, 60) : undefined,
+          }))
+          .filter((g): g is GlossaryEntry => typeof g.term === 'string' && typeof g.zh === 'string')
+          .slice(0, 60);
+        break;
+      } catch (e) {
+        if (attempt === 0) retries++;
+        else st.warnings.push(`glossary 失敗，以空表續跑：${e instanceof Error ? e.message : e}`);
+      }
+    }
+    await jsonPut(env, `subs/${videoId}/glossary.json`, { videoId, model, sourceUploaded: st.sourceUploaded, glossary });
+  }
+
+  st.stage = 'glossary';
+  st.step = undefined;
+  await settle(env, st, meter, retries, asrRepairedDelta);
+  return { status: 202, body: { ok: true }, next: { videoId, step: 'translate', batch: 0 } };
+}
+
+async function translateStep(env: JobEnv, videoId: string, batch: number, llmOverride?: LlmFn): Promise<StepResult> {
+  const run = await loadRun(env, videoId);
+  if ('drop' in run) return { status: 200, body: { ok: false, dropped: run.drop } };
+  if ('restart' in run) return { status: 202, body: { ok: true, restarted: true }, next: run.restart };
+  const { st, src } = run;
+  const total = st.translateBatches ?? 0;
+  if (total === 0) return { status: 202, body: { ok: true, restarted: true }, next: { videoId, step: 'plan' } };
+
+  const nextMsg = (b: number): JobMsg =>
+    b + 1 < total ? { videoId, step: 'translate', batch: b + 1 } : { videoId, step: 'assemble' };
+  const partKey = `subs/${videoId}/parts/translate_${batch}.json`;
+
+  const existing = await jsonGet<{ sourceUploaded: string }>(env, partKey);
+  if (existing && existing.sourceUploaded === st.sourceUploaded) {
+    return { status: 200, body: { ok: true, skipped: `translate ${batch} 已存在` }, next: nextMsg(batch) };
+  }
+
+  const sentencesDoc = await jsonGet<{ sentences: Sentence[]; sourceUploaded?: string }>(env, `subs/${videoId}/sentences.json`);
+  const glossaryDoc = await jsonGet<{ glossary: GlossaryEntry[] }>(env, `subs/${videoId}/glossary.json`);
+  if (!sentencesDoc || sentencesDoc.sourceUploaded !== st.sourceUploaded || !glossaryDoc) {
+    return { status: 202, body: { ok: true, restarted: true }, next: { videoId, step: 'plan' } };
+  }
+  const allChunks = chunkSentences(sentencesDoc.sentences);
+  const chunks = allChunks.slice(batch * CHUNKS_PER_BATCH, (batch + 1) * CHUNKS_PER_BATCH);
+
+  const meter: StepMeter = { tokens: 0, calls: 0 };
+  const llm = makeStepLlm(env, meter, chunks.length * 9 + 2, llmOverride); // 含切半分治與禁用詞重打的預算
+  let retries = 0;
+  const entries: Array<[number, { zh: string; note?: string }]> = [];
+  const problems: string[] = [];
+  const outcomes = await Promise.all(
+    chunks.map((c) => translateChunk(llm, src.meta, glossaryDoc.glossary, c, src.track.languageCode))
+  );
+  for (let i = 0; i < outcomes.length; i++) {
+    const o = outcomes[i];
+    retries += o.retries;
+    if (o.problems.length > 0) problems.push(`chunk ${batch * CHUNKS_PER_BATCH + i + 1}/${allChunks.length}：${o.problems.join('；')}`);
+    for (const [id, v] of o.byId) entries.push([id, v]);
+  }
+  await jsonPut(env, partKey, { sourceUploaded: st.sourceUploaded, entries, problems, retries });
+
+  st.stage = 'translate';
+  st.step = `${batch + 1}/${total}`;
+  await settle(env, st, meter, retries);
+  return { status: 202, body: { ok: true, translated: entries.length }, next: nextMsg(batch) };
+}
+
+async function assembleStep(env: JobEnv, videoId: string): Promise<StepResult> {
+  const run = await loadRun(env, videoId);
+  if ('drop' in run) return { status: 200, body: { ok: false, dropped: run.drop } };
+  if ('restart' in run) return { status: 202, body: { ok: true, restarted: true }, next: run.restart };
+  const { st, src } = run;
+  const model = env.GEMINI_MODEL || 'gemini-3.5-flash';
+
+  const sentencesDoc = await jsonGet<{ sentences: Sentence[]; asrRepaired: number; sourceUploaded?: string }>(
+    env,
+    `subs/${videoId}/sentences.json`
+  );
+  const glossaryDoc = await jsonGet<{ glossary: GlossaryEntry[] }>(env, `subs/${videoId}/glossary.json`);
+  if (!sentencesDoc || sentencesDoc.sourceUploaded !== st.sourceUploaded || !glossaryDoc) {
+    return { status: 202, body: { ok: true, restarted: true }, next: { videoId, step: 'plan' } };
+  }
+
+  const byId = new Map<number, { zh: string; note?: string }>();
+  const warnings = [...st.warnings];
+  const total = st.translateBatches ?? 0;
+  for (let b = 0; b < total; b++) {
+    const part = await jsonGet<{
+      sourceUploaded: string;
+      entries: Array<[number, { zh: string; note?: string }]>;
+      problems: string[];
+    }>(env, `subs/${videoId}/parts/translate_${b}.json`);
+    if (!part || part.sourceUploaded !== st.sourceUploaded) throw new Error(`translate part ${b} 缺失，無法組裝`);
+    warnings.push(...part.problems);
+    for (const [id, v] of part.entries) byId.set(id, v);
+  }
+
+  const sentences = sentencesDoc.sentences;
+  const { cues, untranslated, bannedHits, extendedHits } = assembleBilingual(sentences, src.cues, byId);
+  if (untranslated > 0) warnings.push(`${untranslated} 句翻譯失敗，以原文代替（標 untranslated）`);
+  if (bannedHits.length > 0) warnings.push(`禁用詞殘留：${bannedHits.join('、')}`);
+  const hints = extendedHits.length > 0 ? [`疑似中國用語（OpenCC 參考，僅提示）：${extendedHits.slice(0, 20).join('、')}`] : [];
+  const autoNotes = attachGlossaryNotes(cues, glossaryDoc.glossary);
+
+  // schema v2（migration.md §1）：orig 取代 en、kind 標記 speech/card、trust 標記信任等級
+  const needRepair = src.track.kind === 'asr';
+  const v2cues = cues.map(({ en, ...rest }: BilingualCue) => ({ ...rest, kind: 'speech' as const, orig: en }));
+  const bilingual = {
+    videoId,
+    schema: 2,
+    meta: src.meta,
+    sourceLang: src.track.languageCode,
+    tier: src.tier,
+    route: 'text',
+    trust: needRepair ? 'asr-repaired' : 'cc',
+    asrRepaired: sentencesDoc.asrRepaired,
+    model,
+    promptVersion: PROMPT_VERSION,
+    generatedAt: new Date().toISOString(),
+    warnings,
+    hints,
+    cues: v2cues,
+  };
+  await jsonPut(env, `subs/${videoId}/bilingual.json`, bilingual);
+  await env.SUBS.put(`subs/${videoId}/bilingual.srt`, toSrt(cues), {
+    httpMetadata: { contentType: 'text/plain; charset=utf-8' },
+  });
+  await jsonPut(env, `subs/${videoId}/info.json`, {
+    videoId,
+    title: src.meta.title,
+    channel: src.meta.channel,
+    durationSec: src.meta.durationSec,
+    cueCount: cues.length,
+    generatedAt: bilingual.generatedAt,
+  });
+
+  // checkpoint 清掃（保留 sentences/glossary — 它們是可讀的中間產物）
+  const parts = await env.SUBS.list({ prefix: `subs/${videoId}/parts/` });
+  for (const o of parts.objects) await env.SUBS.delete(o.key);
+
+  st.stage = 'done';
+  st.step = undefined;
+  st.asrRepaired = sentencesDoc.asrRepaired;
+  st.warnings = warnings;
+  await writeStatus(env, st);
+
+  const stats: PipelineStats = {
+    sentences: sentences.length,
+    chunks: chunkSentences(sentences).length,
+    glossaryTerms: glossaryDoc.glossary.length,
+    asrRepaired: sentencesDoc.asrRepaired,
+    autoNotes,
+    llmCalls: st.llmCalls,
+    retries: st.retries,
+    untranslated,
+    warnings,
+    hints,
+    elapsedMs: Date.now() - new Date(st.startedAt).getTime(),
+  };
+  return { status: 200, body: { ok: true, stats } };
+}
+
+// --- 步驟分派 ---
+
+export async function runStep(env: JobEnv, msg: JobMsg, llmOverride?: LlmFn): Promise<StepResult> {
+  switch (msg.step) {
+    case 'plan':
+      return planStep(env, msg.videoId, msg.force === true);
+    case 'repair':
+      return repairStep(env, msg.videoId, msg.batch ?? 0, llmOverride);
+    case 'glossary':
+      return glossaryStep(env, msg.videoId, llmOverride);
+    case 'translate':
+      return translateStep(env, msg.videoId, msg.batch ?? 0, llmOverride);
+    case 'assemble':
+      return assembleStep(env, msg.videoId);
+  }
+}
+
+// --- queue consumer（保險絲都在這一層）---
+
+export interface MsgLike {
+  body: JobMsg;
+  attempts: number;
+  ack(): void;
+  retry(opts?: { delaySeconds?: number }): void;
+}
+
+const LLM_STEPS: ReadonlySet<JobStep> = new Set(['repair', 'glossary', 'translate']);
+
+export async function handleJob(msg: MsgLike, env: JobEnv, llmOverride?: LlmFn): Promise<void> {
+  const { videoId, step } = msg.body;
+  try {
+    if (LLM_STEPS.has(step)) {
+      if (!llmOverride && !env.GEMINI_API_KEY) throw new Error('未設定 GEMINI_API_KEY secret');
+      const st = await jsonGet<JobStatus>(env, statusKey(videoId));
+      // 保險絲第 3 層：每片 token 上限 → 永久失敗（只有 ?force=1 能重啟）
+      const videoCap = num(env.VIDEO_TOKEN_CAP, 500_000);
+      if (st && st.tokensUsed >= videoCap) {
+        await failStatus(env, videoId, `token 用量 ${st.tokensUsed} 超過每片上限 ${videoCap}`);
+        msg.ack();
+        return;
+      }
+      // 保險絲第 4 層：日預算 → 暫停（不算失敗；隔日看門狗自動續跑）
+      const dailyCap = num(env.DAILY_TOKEN_CAP, 2_000_000);
+      const daily = await readDailyBudget(env);
+      if (daily.tokens >= dailyCap) {
+        if (st && !st.failed) {
+          st.stage = 'paused';
+          st.failReason = `日預算 ${daily.tokens}/${dailyCap} tokens 已用完，明日自動續跑`;
+          await writeStatus(env, st);
+        }
+        msg.ack();
+        return;
+      }
+    }
+    const r = await runStep(env, msg.body, llmOverride);
+    if (r.next && env.JOBS) await env.JOBS.send(r.next);
+    msg.ack();
+  } catch (e) {
+    const reason = e instanceof Error ? e.message : String(e);
+    // 保險絲第 2 層：3 次投遞仍失敗 → 永久標記，不再重試
+    if (msg.attempts >= 3) {
+      await failStatus(env, videoId, `${step} 步驟連續失敗：${reason}`);
+      msg.ack();
+    } else {
+      msg.retry({ delaySeconds: 30 });
+    }
+  }
+}
+
+// --- cron 看門狗（零成本：只掃描與 enqueue，永不碰 LLM）---
+// 角色：補漏。正常情況 ingest/translate 端點會直接 enqueue plan；訊息遺失或 run
+// 斷鏈（status 超過 STALE_MS 沒更新）時由這裡重排。每輪最多排 2 支。
+
+export async function watchdog(env: JobEnv): Promise<{ scanned: number; enqueued: string[] }> {
+  const enqueued: string[] = [];
+  if (!env.JOBS) return { scanned: 0, enqueued };
+
+  const prefixes: string[] = [];
+  let cursor: string | undefined;
+  do {
+    const res = await env.SUBS.list({ prefix: 'subs/', delimiter: '/', cursor });
+    prefixes.push(...(res.delimitedPrefixes ?? []));
+    cursor = res.truncated ? res.cursor : undefined;
+  } while (cursor);
+
+  let scanned = 0;
+  for (const p of prefixes) {
+    if (enqueued.length >= 2) break;
+    const videoId = p.slice('subs/'.length).replace(/\/$/, '');
+    if (!/^[A-Za-z0-9_-]{11}$/.test(videoId)) continue;
+    scanned++;
+
+    const srcHead = await env.SUBS.head(`subs/${videoId}/source.json`);
+    if (!srcHead) continue;
+    const bilHead = await env.SUBS.head(`subs/${videoId}/bilingual.json`);
+    if (bilHead && bilHead.uploaded >= srcHead.uploaded) continue; // 已是最新
+
+    const st = await jsonGet<JobStatus>(env, statusKey(videoId));
+    if (st && st.sourceUploaded === srcHead.uploaded.toISOString()) {
+      if (st.failed) continue; // 永久失敗，等人工 force
+      if (Date.now() - new Date(st.updatedAt).getTime() < STALE_MS) continue; // run 還活著
+      if (st.stage === 'paused' && st.updatedAt.slice(0, 10) === new Date().toISOString().slice(0, 10)) continue; // 日預算用完，今天不用再試
+    }
+
+    const src = await jsonGet<SourceDoc>(env, `subs/${videoId}/source.json`);
+    if (!src || routeSource(src).route === 'reject') continue;
+
+    await env.JOBS.send({ videoId, step: 'plan' });
+    enqueued.push(videoId);
+  }
+  return { scanned, enqueued };
+}
+
+// --- in-process 全程執行（測試與 wrangler dev 用；production 一律走 queue）---
+
+export async function runPipeline(
+  env: JobEnv,
+  videoId: string,
+  force: boolean,
+  llmOverride?: LlmFn
+): Promise<{ status: number; body: Record<string, unknown> }> {
+  let msg: JobMsg | undefined = { videoId, step: 'plan', force };
+  let last: StepResult = { status: 500, body: { ok: false, error: '未執行任何步驟' } };
+  for (let guard = 0; msg && guard < 200; guard++) {
+    last = await runStep(env, msg, llmOverride);
+    msg = last.next;
+  }
+  return { status: last.status, body: last.body };
+}

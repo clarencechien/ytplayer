@@ -1,6 +1,16 @@
-// runPipeline / translateNextPending 端到端：fake R2 + fake LLM。
+// Queues 任務系統端到端：fake R2 + fake Queue + fake LLM。
+// 涵蓋：in-process 全程（runPipeline）、路由表、queue 步進與冪等、看門狗、四層保險絲的 2–4 層。
 import { describe, it, expect } from 'vitest';
-import { runPipeline, translateNextPending } from '../src/pipeline';
+import {
+  runPipeline,
+  runStep,
+  handleJob,
+  watchdog,
+  type JobMsg,
+  type JobStatus,
+  type MsgLike,
+  type JobEnv,
+} from '../src/jobs';
 
 class FakeR2 {
   store = new Map<string, { value: string; uploaded: Date }>();
@@ -10,7 +20,7 @@ class FakeR2 {
     return e === undefined ? null : { text: async () => e.value, body: e.value };
   }
   async put(key: string, value: string) {
-    // uploaded 單調遞增（貼近 now，讓鎖的新鮮度判斷成立）
+    // uploaded 單調遞增（貼近 now，讓新鮮度判斷成立）
     this.store.set(key, { value: String(value), uploaded: new Date(Date.now() + this.seq++) });
   }
   async head(key: string) {
@@ -20,18 +30,48 @@ class FakeR2 {
   async delete(key: string) {
     this.store.delete(key);
   }
-  async list({ prefix, delimiter }: { prefix: string; delimiter?: string }) {
+  async list({ prefix, delimiter }: { prefix: string; delimiter?: string; cursor?: string }) {
     const delimitedPrefixes = new Set<string>();
+    const objects: Array<{ key: string }> = [];
     for (const key of this.store.keys()) {
       if (!key.startsWith(prefix)) continue;
       if (delimiter) {
         const rest = key.slice(prefix.length);
         const i = rest.indexOf(delimiter);
         if (i >= 0) delimitedPrefixes.add(prefix + rest.slice(0, i + 1));
+        else objects.push({ key });
+      } else {
+        objects.push({ key });
       }
     }
-    return { delimitedPrefixes: [...delimitedPrefixes], objects: [], truncated: false as const };
+    return { delimitedPrefixes: [...delimitedPrefixes], objects, truncated: false as const };
   }
+}
+
+// 佇列 + 投遞驅動：retry 會以 attempts+1 重新入列（模擬 Queues at-least-once 語意）
+class FakeQueue {
+  pending: Array<{ body: JobMsg; attempts: number }> = [];
+  async send(m: JobMsg) {
+    this.pending.push({ body: m, attempts: 1 });
+  }
+}
+
+async function drain(q: FakeQueue, env: JobEnv, llm?: (p: string) => Promise<string>, maxIter = 100): Promise<number> {
+  let iter = 0;
+  while (q.pending.length > 0 && iter < maxIter) {
+    iter++;
+    const item = q.pending.shift()!;
+    const msg: MsgLike = {
+      body: item.body,
+      attempts: item.attempts,
+      ack() {},
+      retry() {
+        q.pending.push({ body: item.body, attempts: item.attempts + 1 });
+      },
+    };
+    await handleJob(msg, env, llm);
+  }
+  return iter;
 }
 
 const makeSource = () => ({
@@ -40,7 +80,7 @@ const makeSource = () => ({
   sourceLang: 'en',
   availableTracks: [],
   meta: { title: 'Agentic infra', channel: 'Claude', description: 'desc', durationSec: 100 },
-  track: { languageCode: 'en' },
+  track: { languageCode: 'en', kind: null as string | null },
   cues: [
     { start: 0, dur: 2, text: 'Hello everyone.' },
     { start: 2, dur: 2, text: 'Agents are moving to' },
@@ -49,7 +89,7 @@ const makeSource = () => ({
   ],
 });
 
-// glossary 呼叫回術語表；修稿呼叫回修正後英文；翻譯呼叫依 prompt 中的「id: 句子」回中文
+// glossary 呼叫回術語表；修稿呼叫回修正後原文；翻譯呼叫依 prompt 中的「id: 句子」回中文
 const fakeLlm = async (prompt: string): Promise<string> => {
   if (prompt.includes('術語編輯')) {
     return '[{"term":"agents","zh":"Agent","note":"能自主完成任務的 AI 程式"}]';
@@ -61,11 +101,16 @@ const fakeLlm = async (prompt: string): Promise<string> => {
   return JSON.stringify(ids.map((id) => ({ id, zh: `中文${id}。` })));
 };
 
-describe('runPipeline（整合）', () => {
-  it('Tier 2 全流程：sentences/glossary/bilingual/srt 都寫入，第二次命中 cache', async () => {
+const envOf = (SUBS: FakeR2, JOBS?: FakeQueue): JobEnv =>
+  ({ SUBS: SUBS as unknown as R2Bucket, JOBS, GEMINI_MODEL: 'fake-model' }) as JobEnv;
+
+const readJson = (SUBS: FakeR2, key: string) => JSON.parse(SUBS.store.get(key)!.value);
+
+describe('runPipeline（in-process 整合）', () => {
+  it('Tier 2 全流程：sentences/glossary/bilingual(v2)/srt/status 都寫入，第二次命中 cache', async () => {
     const SUBS = new FakeR2();
     await SUBS.put('subs/ksfm6jeTg3Q/source.json', JSON.stringify(makeSource()));
-    const env = { SUBS: SUBS as unknown as R2Bucket, GEMINI_MODEL: 'fake-model' };
+    const env = envOf(SUBS);
 
     const r1 = await runPipeline(env, 'ksfm6jeTg3Q', false, fakeLlm);
     expect(r1.status).toBe(200);
@@ -73,75 +118,88 @@ describe('runPipeline（整合）', () => {
     expect(stats.sentences).toBe(3); // 兩個 cue 併成一句 + 另兩句
     expect(stats.glossaryTerms).toBe(1);
     expect(stats.untranslated).toBe(0);
-    expect(stats.asrRepaired).toBe(0); // Tier 2 不修稿
-    expect(stats.autoNotes).toBe(1); // "Agents are moving..." 第一次出現 → 自動附白話註
+    expect(stats.asrRepaired).toBe(0); // 人工軌不修稿
+    expect(stats.autoNotes).toBe(1);
     expect(stats.warnings).toEqual([]);
 
-    const bilingual = JSON.parse(SUBS.store.get('subs/ksfm6jeTg3Q/bilingual.json')!.value);
+    const bilingual = readJson(SUBS, 'subs/ksfm6jeTg3Q/bilingual.json');
+    expect(bilingual.schema).toBe(2);
+    expect(bilingual.trust).toBe('cc');
+    expect(bilingual.route).toBe('text');
     expect(bilingual.promptVersion).toBeTruthy();
     expect(bilingual.model).toBe('fake-model');
     expect(bilingual.cues.length).toBe(3);
     expect(bilingual.cues[1]).toMatchObject({
       start: 2,
       end: 6,
-      en: 'Agents are moving to production today.',
+      kind: 'speech',
+      orig: 'Agents are moving to production today.',
       zh: '中文1。',
       note: 'Agent：能自主完成任務的 AI 程式',
     });
     expect(SUBS.store.get('subs/ksfm6jeTg3Q/bilingual.srt')!.value).toContain('中文0。\nHello everyone.');
     expect(SUBS.store.has('subs/ksfm6jeTg3Q/sentences.json')).toBe(true);
     expect(SUBS.store.has('subs/ksfm6jeTg3Q/glossary.json')).toBe(true);
+    const status = readJson(SUBS, 'subs/ksfm6jeTg3Q/status.json') as JobStatus;
+    expect(status.stage).toBe('done');
+    // checkpoint 清掃
+    expect([...SUBS.store.keys()].filter((k) => k.includes('/parts/'))).toEqual([]);
 
     const r2 = await runPipeline(env, 'ksfm6jeTg3Q', false, fakeLlm);
     expect(r2.body).toMatchObject({ ok: true, cached: true });
   });
 
-  it('翻譯持續缺句 → fallback 英文 + warnings 非空（驗收會擋）', async () => {
+  it('翻譯持續缺句 → fallback 原文 + warnings 非空（驗收會擋）', async () => {
     const SUBS = new FakeR2();
     await SUBS.put('subs/ksfm6jeTg3Q/source.json', JSON.stringify(makeSource()));
-    const env = { SUBS: SUBS as unknown as R2Bucket, GEMINI_MODEL: 'fake-model' };
     const partialLlm = async (prompt: string): Promise<string> => {
       if (prompt.includes('術語編輯')) return '[]';
       return '[{"id":0,"zh":"只有第一句。"}]';
     };
-    const r = await runPipeline(env, 'ksfm6jeTg3Q', false, partialLlm);
+    const r = await runPipeline(envOf(SUBS), 'ksfm6jeTg3Q', false, partialLlm);
     expect(r.status).toBe(200);
     const stats = (r.body as { stats: { untranslated: number; warnings: string[] } }).stats;
     expect(stats.untranslated).toBe(2);
     expect(stats.warnings.some((w) => w.includes('翻譯失敗'))).toBe(true);
   });
 
-  it('Phase 2.5：英文 ASR 軌先修稿再翻，en 是修好的版本', async () => {
+  it('英文 ASR：先修稿再翻，orig 是修好的版本、trust 是 asr-repaired', async () => {
     const SUBS = new FakeR2();
     const src = makeSource();
     src.tier = 3;
     src.track = { languageCode: 'en', kind: 'asr' };
     await SUBS.put('subs/ksfm6jeTg3Q/source.json', JSON.stringify(src));
-    const env = { SUBS: SUBS as unknown as R2Bucket, GEMINI_MODEL: 'fake-model' };
-    const r = await runPipeline(env, 'ksfm6jeTg3Q', false, fakeLlm);
+    const r = await runPipeline(envOf(SUBS), 'ksfm6jeTg3Q', false, fakeLlm);
     expect(r.status).toBe(200);
-    const stats = (r.body as { stats: { asrRepaired: number } }).stats;
-    expect(stats.asrRepaired).toBe(3);
-    const bilingual = JSON.parse(SUBS.store.get('subs/ksfm6jeTg3Q/bilingual.json')!.value);
+    expect((r.body as { stats: { asrRepaired: number } }).stats.asrRepaired).toBe(3);
+    const bilingual = readJson(SUBS, 'subs/ksfm6jeTg3Q/bilingual.json');
     expect(bilingual.tier).toBe(3);
-    expect(bilingual.cues[0].en).toBe('Repaired sentence 0.');
+    expect(bilingual.trust).toBe('asr-repaired');
+    expect(bilingual.cues[0].orig).toBe('Repaired sentence 0.');
     expect(bilingual.cues[0].zh).toBe('中文0。');
   });
 
-  it('非英文 ASR 軌被拒；中文軌被拒；日文「人工」軌可翻（Tier 1 重做路徑）', async () => {
+  it('路由表：日文 ASR 開放（走修稿）；韓文 ASR 拒；中文軌拒；日文人工軌可翻', async () => {
     const SUBS = new FakeR2();
-    const env = { SUBS: SUBS as unknown as R2Bucket, GEMINI_MODEL: 'fake-model' };
+    const env = envOf(SUBS);
 
     const jaAsr = makeSource();
     jaAsr.tier = 3;
     jaAsr.track = { languageCode: 'ja', kind: 'asr' };
     await SUBS.put('subs/ksfm6jeTg3Q/source.json', JSON.stringify(jaAsr));
-    expect((await runPipeline(env, 'ksfm6jeTg3Q', false, fakeLlm)).status).toBe(422);
+    const rJa = await runPipeline(env, 'ksfm6jeTg3Q', false, fakeLlm);
+    expect(rJa.status).toBe(200); // asr-language-experiment 決策：非英文 ASR 閘門開放
+    expect(readJson(SUBS, 'subs/ksfm6jeTg3Q/bilingual.json').trust).toBe('asr-repaired');
+
+    const koAsr = makeSource();
+    koAsr.track = { languageCode: 'ko', kind: 'asr' };
+    await SUBS.put('subs/ksfm6jeTg3Q/source.json', JSON.stringify(koAsr));
+    expect((await runPipeline(env, 'ksfm6jeTg3Q', false, fakeLlm)).status).toBe(422); // 韓文未量測，走 video 路線
 
     const zhManual = makeSource();
     zhManual.track = { languageCode: 'zh-Hant', kind: null };
     await SUBS.put('subs/ksfm6jeTg3Q/source.json', JSON.stringify(zhManual));
-    expect((await runPipeline(env, 'ksfm6jeTg3Q', false, fakeLlm)).status).toBe(422);
+    expect((await runPipeline(env, 'ksfm6jeTg3Q', false, fakeLlm)).status).toBe(422); // 紅線
 
     const jaManual = makeSource();
     jaManual.tier = 1; // 影片有繁中軌，但使用者主動選了日文原文軌重做
@@ -149,85 +207,238 @@ describe('runPipeline（整合）', () => {
     await SUBS.put('subs/ksfm6jeTg3Q/source.json', JSON.stringify(jaManual));
     const r = await runPipeline(env, 'ksfm6jeTg3Q', false, fakeLlm);
     expect(r.status).toBe(200);
-    const stats = (r.body as { stats: { asrRepaired: number } }).stats;
-    expect(stats.asrRepaired).toBe(0); // 人工軌不修稿
+    expect((r.body as { stats: { asrRepaired: number } }).stats.asrRepaired).toBe(0); // 人工軌不修稿
   });
 });
 
-describe('translateNextPending（cron 佇列）', () => {
-  const envOf = (SUBS: FakeR2) => ({ SUBS: SUBS as unknown as R2Bucket, GEMINI_MODEL: 'fake-model' });
-
-  it('翻第一支待處理的 Tier 2，鎖檔會清掉', async () => {
+describe('queue 步進（handleJob + FakeQueue）', () => {
+  it('plan 入列後自我續鏈到完成；status 每步更新、日預算有記帳', async () => {
     const SUBS = new FakeR2();
+    const q = new FakeQueue();
+    const env = envOf(SUBS, q);
+    const src = makeSource();
+    src.track = { languageCode: 'en', kind: 'asr' }; // 走最長鏈：repair → glossary → translate → assemble
+    await SUBS.put('subs/ksfm6jeTg3Q/source.json', JSON.stringify(src));
+
+    await q.send({ videoId: 'ksfm6jeTg3Q', step: 'plan' });
+    const steps = await drain(q, env, fakeLlm);
+    expect(steps).toBe(5); // plan + repair + glossary + translate + assemble
+
+    expect(readJson(SUBS, 'subs/ksfm6jeTg3Q/bilingual.json').schema).toBe(2);
+    const st = readJson(SUBS, 'subs/ksfm6jeTg3Q/status.json') as JobStatus;
+    expect(st.stage).toBe('done');
+    expect(st.llmCalls).toBeGreaterThan(0);
+    const today = new Date().toISOString().slice(0, 10);
+    expect(readJson(SUBS, `budget/${today}.json`).calls).toBe(st.llmCalls);
+  });
+
+  it('步驟冪等：repair part 已存在（同版 source）→ 跳過工作直接接鏈', async () => {
+    const SUBS = new FakeR2();
+    const env = envOf(SUBS);
+    const src = makeSource();
+    src.track = { languageCode: 'en', kind: 'asr' };
+    await SUBS.put('subs/ksfm6jeTg3Q/source.json', JSON.stringify(src));
+
+    let calls = 0;
+    const countingLlm = async (p: string) => {
+      calls++;
+      return fakeLlm(p);
+    };
+    const plan = await runStep(env, { videoId: 'ksfm6jeTg3Q', step: 'plan' });
+    expect(plan.next).toEqual({ videoId: 'ksfm6jeTg3Q', step: 'repair', batch: 0 });
+
+    const r1 = await runStep(env, plan.next!, countingLlm);
+    const afterFirst = calls;
+    expect(afterFirst).toBeGreaterThan(0);
+    expect(r1.next).toEqual({ videoId: 'ksfm6jeTg3Q', step: 'glossary' });
+
+    const r2 = await runStep(env, plan.next!, countingLlm); // 同一步再投遞一次（at-least-once）
+    expect(calls).toBe(afterFirst); // 零 LLM 花費
+    expect(r2.body.skipped).toBeTruthy();
+    expect(r2.next).toEqual({ videoId: 'ksfm6jeTg3Q', step: 'glossary' });
+  });
+
+  it('source 跑到一半被重新 ingest → 步驟偵測版本不符，改排 plan 重來', async () => {
+    const SUBS = new FakeR2();
+    const env = envOf(SUBS);
     await SUBS.put('subs/ksfm6jeTg3Q/source.json', JSON.stringify(makeSource()));
-    const r = await translateNextPending(envOf(SUBS), fakeLlm);
-    expect(r.translated).toBe('ksfm6jeTg3Q');
-    expect(r.status).toBe(200);
-    expect(SUBS.store.has('subs/ksfm6jeTg3Q/bilingual.json')).toBe(true);
-    expect(SUBS.store.has('subs/ksfm6jeTg3Q/.translating')).toBe(false);
-  });
-
-  it('非英文 ASR 跳過、不佔佇列，後面可翻的照翻', async () => {
-    const SUBS = new FakeR2();
-    const t3 = makeSource();
-    t3.videoId = 'AAAAAAAAAAA';
-    t3.tier = 3;
-    t3.track = { languageCode: 'ja', kind: 'asr' };
-    await SUBS.put('subs/AAAAAAAAAAA/source.json', JSON.stringify(t3));
-    await SUBS.put('subs/ksfm6jeTg3Q/source.json', JSON.stringify(makeSource()));
-    const r = await translateNextPending(envOf(SUBS), fakeLlm);
-    expect(r.translated).toBe('ksfm6jeTg3Q');
-    expect(SUBS.store.has('subs/AAAAAAAAAAA/bilingual.json')).toBe(false);
-  });
-
-  it('非英文 ASR 有 .allow-any-asr 標記時才進佇列（實驗用單片豁免）', async () => {
-    const SUBS = new FakeR2();
-    const ja = makeSource();
-    ja.tier = 3;
-    ja.track = { languageCode: 'ja', kind: 'asr' };
-    await SUBS.put('subs/ksfm6jeTg3Q/source.json', JSON.stringify(ja));
-    expect((await translateNextPending(envOf(SUBS), fakeLlm)).translated).toBeUndefined();
-
-    await SUBS.put('subs/ksfm6jeTg3Q/.allow-any-asr', new Date().toISOString());
-    const r = await translateNextPending(envOf(SUBS), fakeLlm);
-    expect(r.translated).toBe('ksfm6jeTg3Q');
-    expect(r.status).toBe(200);
-  });
-
-  it('標記不會讓中文軌通過（紅線仍在）', async () => {
-    const SUBS = new FakeR2();
-    const zh = makeSource();
-    zh.track = { languageCode: 'zh-TW', kind: 'asr' };
-    await SUBS.put('subs/ksfm6jeTg3Q/source.json', JSON.stringify(zh));
-    await SUBS.put('subs/ksfm6jeTg3Q/.allow-any-asr', new Date().toISOString());
-    expect((await translateNextPending(envOf(SUBS), fakeLlm)).translated).toBeUndefined();
-  });
-
-  it('英文 ASR 軌會進佇列（Phase 2.5）', async () => {
-    const SUBS = new FakeR2();
-    const t3 = makeSource();
-    t3.tier = 3;
-    t3.track = { languageCode: 'en', kind: 'asr' };
-    await SUBS.put('subs/ksfm6jeTg3Q/source.json', JSON.stringify(t3));
-    const r = await translateNextPending(envOf(SUBS), fakeLlm);
-    expect(r.translated).toBe('ksfm6jeTg3Q');
-    expect(r.status).toBe(200);
-  });
-
-  it('bilingual 比 source 新 → 無事可做；重新 ingest（source 較新）→ 重翻', async () => {
-    const SUBS = new FakeR2();
-    await SUBS.put('subs/ksfm6jeTg3Q/source.json', JSON.stringify(makeSource()));
-    await translateNextPending(envOf(SUBS), fakeLlm);
-    expect((await translateNextPending(envOf(SUBS), fakeLlm)).translated).toBeUndefined();
+    const plan = await runStep(env, { videoId: 'ksfm6jeTg3Q', step: 'plan' });
     await SUBS.put('subs/ksfm6jeTg3Q/source.json', JSON.stringify(makeSource())); // re-ingest
-    expect((await translateNextPending(envOf(SUBS), fakeLlm)).translated).toBe('ksfm6jeTg3Q');
+    const r = await runStep(env, plan.next!, fakeLlm);
+    expect(r.next).toEqual({ videoId: 'ksfm6jeTg3Q', step: 'plan' });
+  });
+});
+
+describe('保險絲', () => {
+  const statusOf = (over: Partial<JobStatus>): JobStatus => ({
+    videoId: 'ksfm6jeTg3Q',
+    stage: 'translate',
+    startedAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+    sourceUploaded: '',
+    route: 'text',
+    repairBatches: 0,
+    translateBatches: 1,
+    tokensUsed: 0,
+    llmCalls: 0,
+    retries: 0,
+    asrRepaired: 0,
+    warnings: [],
+    ...over,
   });
 
-  it('新鮮的 .translating 鎖 → 跳過（防 cron 重疊）', async () => {
+  it('第 2 層：步驟連續失敗 3 次 → 永久標記 failed，不再重試', async () => {
     const SUBS = new FakeR2();
+    const q = new FakeQueue();
+    const env = envOf(SUBS, q);
     await SUBS.put('subs/ksfm6jeTg3Q/source.json', JSON.stringify(makeSource()));
-    await SUBS.put('subs/ksfm6jeTg3Q/.translating', new Date().toISOString());
-    const r = await translateNextPending(envOf(SUBS), fakeLlm);
-    expect(r.translated).toBeUndefined();
+    const head = await SUBS.head('subs/ksfm6jeTg3Q/source.json');
+    const su = head!.uploaded.toISOString();
+    // 假造斷鏈現場：sentences/glossary 都在，status 說 translate 已完成 1 批，但 part 遺失 → assemble 必炸
+    await SUBS.put('subs/ksfm6jeTg3Q/sentences.json', JSON.stringify({ sentences: [], asrRepaired: 0, sourceUploaded: su }));
+    await SUBS.put('subs/ksfm6jeTg3Q/glossary.json', JSON.stringify({ glossary: [], sourceUploaded: su }));
+    await SUBS.put('subs/ksfm6jeTg3Q/status.json', JSON.stringify(statusOf({ sourceUploaded: su, stage: 'assemble' })));
+    await q.send({ videoId: 'ksfm6jeTg3Q', step: 'assemble' });
+    const steps = await drain(q, env, fakeLlm);
+    expect(steps).toBe(3); // 首投 + 2 次 retry，第 3 次標記失敗
+    const st = readJson(SUBS, 'subs/ksfm6jeTg3Q/status.json') as JobStatus;
+    expect(st.failed).toBe(true);
+    expect(st.failReason).toContain('assemble');
+    expect(q.pending.length).toBe(0);
+  });
+
+  it('第 3 層：每片 token 超上限 → 永久 failed、不打 LLM', async () => {
+    const SUBS = new FakeR2();
+    const env = { ...envOf(SUBS, new FakeQueue()), VIDEO_TOKEN_CAP: '1000' } as JobEnv;
+    await SUBS.put('subs/ksfm6jeTg3Q/source.json', JSON.stringify(makeSource()));
+    const head = await SUBS.head('subs/ksfm6jeTg3Q/source.json');
+    await SUBS.put(
+      'subs/ksfm6jeTg3Q/status.json',
+      JSON.stringify(statusOf({ sourceUploaded: head!.uploaded.toISOString(), tokensUsed: 5000 }))
+    );
+    let calls = 0;
+    const msg: MsgLike = { body: { videoId: 'ksfm6jeTg3Q', step: 'translate', batch: 0 }, attempts: 1, ack() {}, retry() {} };
+    await handleJob(msg, env, async () => (calls++, '[]'));
+    expect(calls).toBe(0);
+    const st = readJson(SUBS, 'subs/ksfm6jeTg3Q/status.json') as JobStatus;
+    expect(st.failed).toBe(true);
+    expect(st.failReason).toContain('上限');
+  });
+
+  it('第 4 層：日預算用完 → paused（非 failed）、不打 LLM；看門狗當日不重排', async () => {
+    const SUBS = new FakeR2();
+    const q = new FakeQueue();
+    const env = { ...envOf(SUBS, q), DAILY_TOKEN_CAP: '100' } as JobEnv;
+    await SUBS.put('subs/ksfm6jeTg3Q/source.json', JSON.stringify(makeSource()));
+    const head = await SUBS.head('subs/ksfm6jeTg3Q/source.json');
+    await SUBS.put(
+      'subs/ksfm6jeTg3Q/status.json',
+      JSON.stringify(statusOf({ sourceUploaded: head!.uploaded.toISOString() }))
+    );
+    const today = new Date().toISOString().slice(0, 10);
+    await SUBS.put(`budget/${today}.json`, JSON.stringify({ tokens: 500, calls: 3 }));
+
+    let calls = 0;
+    const msg: MsgLike = { body: { videoId: 'ksfm6jeTg3Q', step: 'translate', batch: 0 }, attempts: 1, ack() {}, retry() {} };
+    await handleJob(msg, env, async () => (calls++, '[]'));
+    expect(calls).toBe(0);
+    const st = readJson(SUBS, 'subs/ksfm6jeTg3Q/status.json') as JobStatus;
+    expect(st.stage).toBe('paused');
+    expect(st.failed).toBeUndefined();
+
+    const r = await watchdog(env);
+    expect(r.enqueued).toEqual([]); // 今天不用再試（明天日期變了自然放行）
+  });
+});
+
+describe('watchdog（cron 看門狗 — 零成本補漏）', () => {
+  it('pending 影片重排 plan；translated 且最新的跳過', async () => {
+    const SUBS = new FakeR2();
+    const q = new FakeQueue();
+    const env = envOf(SUBS, q);
+    await SUBS.put('subs/ksfm6jeTg3Q/source.json', JSON.stringify(makeSource()));
+    const r = await watchdog(env);
+    expect(r.enqueued).toEqual(['ksfm6jeTg3Q']);
+    expect(q.pending[0].body).toEqual({ videoId: 'ksfm6jeTg3Q', step: 'plan' });
+
+    // 翻完之後（bilingual 比 source 新）→ 無事可做
+    q.pending.length = 0;
+    await drain(q, env, fakeLlm); // 空佇列 no-op
+    await runPipeline(env, 'ksfm6jeTg3Q', false, fakeLlm);
+    expect((await watchdog(env)).enqueued).toEqual([]);
+
+    // 重新 ingest（source 較新）→ 重排。但 10 分鐘內 status 仍新鮮（上一輪 done）不擋 pending 判斷
+    await SUBS.put('subs/ksfm6jeTg3Q/source.json', JSON.stringify(makeSource()));
+    expect((await watchdog(env)).enqueued).toEqual(['ksfm6jeTg3Q']);
+  });
+
+  it('拒收路由（zh / ko ASR）與 failed 的不重排；活著的 run 不重複排', async () => {
+    const SUBS = new FakeR2();
+    const q = new FakeQueue();
+    const env = envOf(SUBS, q);
+
+    const zh = makeSource();
+    zh.videoId = 'AAAAAAAAAAA';
+    zh.track = { languageCode: 'zh-TW', kind: null };
+    await SUBS.put('subs/AAAAAAAAAAA/source.json', JSON.stringify(zh));
+
+    const ko = makeSource();
+    ko.videoId = 'BBBBBBBBBBB';
+    ko.track = { languageCode: 'ko', kind: 'asr' };
+    await SUBS.put('subs/BBBBBBBBBBB/source.json', JSON.stringify(ko));
+
+    // 活著的 run：status 剛更新
+    const live = makeSource();
+    live.videoId = 'CCCCCCCCCCC';
+    await SUBS.put('subs/CCCCCCCCCCC/source.json', JSON.stringify(live));
+    const liveHead = await SUBS.head('subs/CCCCCCCCCCC/source.json');
+    await SUBS.put(
+      'subs/CCCCCCCCCCC/status.json',
+      JSON.stringify({
+        videoId: 'CCCCCCCCCCC',
+        stage: 'translate',
+        startedAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+        sourceUploaded: liveHead!.uploaded.toISOString(),
+        route: 'text',
+        repairBatches: 0,
+        translateBatches: 2,
+        tokensUsed: 0,
+        llmCalls: 1,
+        retries: 0,
+        asrRepaired: 0,
+        warnings: [],
+      })
+    );
+
+    // failed 的 run
+    const failed = makeSource();
+    failed.videoId = 'DDDDDDDDDDD';
+    await SUBS.put('subs/DDDDDDDDDDD/source.json', JSON.stringify(failed));
+    const failedHead = await SUBS.head('subs/DDDDDDDDDDD/source.json');
+    await SUBS.put(
+      'subs/DDDDDDDDDDD/status.json',
+      JSON.stringify({
+        videoId: 'DDDDDDDDDDD',
+        stage: 'failed',
+        failed: true,
+        failReason: 'x',
+        startedAt: new Date().toISOString(),
+        updatedAt: new Date(Date.now() - 60 * 60 * 1000).toISOString(),
+        sourceUploaded: failedHead!.uploaded.toISOString(),
+        route: 'text',
+        repairBatches: 0,
+        translateBatches: 1,
+        tokensUsed: 0,
+        llmCalls: 0,
+        retries: 0,
+        asrRepaired: 0,
+        warnings: [],
+      })
+    );
+
+    const r = await watchdog(env);
+    expect(r.enqueued).toEqual([]);
+    expect(r.scanned).toBe(4);
   });
 });

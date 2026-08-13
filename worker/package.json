@@ -5,7 +5,7 @@
   "scripts": {
     "dev": "wrangler dev",
     "deploy": "wrangler deploy",
-    "deploy:ci": "(wrangler r2 bucket create ytplayer-subs || true) && wrangler deploy",
+    "deploy:ci": "(wrangler r2 bucket create ytplayer-subs || true) && (wrangler queues create ytplayer-jobs || true) && wrangler deploy",
     "test": "vitest run",
     "typecheck": "tsc --noEmit"
   },

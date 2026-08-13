@@ -376,9 +376,9 @@ export function toSrt(cues: BilingualCue[]): string {
     .join('\n');
 }
 
-// --- 主流程 ---
+// --- 路由表（migration.md §1）---
 
-interface SourceDoc {
+export interface SourceDoc {
   videoId: string;
   tier: number;
   sourceLang: string;
@@ -387,19 +387,25 @@ interface SourceDoc {
   cues: Cue[];
 }
 
-// 可否翻譯改成看「被 ingest 的那條軌」而不是 tier：
-// - 中文軌不用翻（拒收）
-// - 人工原文軌 → 可翻，不分語言、不分 tier（Tier 1 使用者主動 ingest 原文軌 = 明示要重做）
-// - ASR 軌 → 僅限英文（Phase 2.5 修稿路線）
-export const canTranslate = (src: { track: { languageCode: string; kind?: string | null } }): boolean => {
-  const lang = src.track.languageCode || '';
-  if (/^zh/i.test(lang)) return false;
-  if (src.track.kind !== 'asr') return true;
-  return /^en(-|$)/i.test(lang);
-};
+// 每支被 ingest 的軌走 text（純文字翻譯）或被拒。判準看「軌」不看 tier：
+// - 中文軌拒收（Tier 1 使用者不滿意時 ingest「原文」軌 = 明示重做，走 text）
+// - 人工原文軌 → text，不分語言
+// - ASR 軌 → text，各語言開放（asr-language-experiment 決策）——除了：
+//   - 韓文 ASR：未量測維持保守；字卡型韓綜本來就該走 video 路線（M3）
+// - video 路線（Gemini 看片，Tier 3 字卡型 / Tier 4）於 M3 移植後加入
+// 紅線不變：tlang 自動翻譯軌永不作為輸入（ext 端就不會送）。
+export type Route = 'text' | 'reject';
 
-export const untranslatableReason = (src: { track: { languageCode: string; kind?: string | null } }): string =>
-  /^zh/i.test(src.track.languageCode || '') ? '中文軌不需要翻譯' : `非英文 ASR（${src.track.languageCode}）不支援`;
+export function routeSource(src: { track: { languageCode: string; kind?: string | null } }): {
+  route: Route;
+  reason?: string;
+} {
+  const lang = src.track.languageCode || '';
+  if (/^zh/i.test(lang)) return { route: 'reject', reason: '中文軌不需要翻譯' };
+  if (src.track.kind !== 'asr') return { route: 'text' };
+  if (/^ko(-|$)/i.test(lang)) return { route: 'reject', reason: '韓文 ASR 未驗證；字卡型韓綜請走看片路線（M3 開放）' };
+  return { route: 'text' };
+}
 
 export interface PipelineEnv {
   SUBS: R2Bucket;
@@ -456,13 +462,19 @@ export async function listVideos(
         meta?: { title?: string };
         track: { languageCode: string; kind?: string | null };
       };
-      const queued = canTranslate(doc);
+      const { route, reason } = routeSource(doc);
+      // 進行中/失敗的 job 狀態一併帶出，清單頁才看得到「卡在哪」
+      const stObj = await env.SUBS.get(`subs/${videoId}/status.json`);
+      const st = stObj
+        ? (JSON.parse(await stObj.text()) as { stage?: string; step?: string; failed?: boolean; failReason?: string })
+        : undefined;
       out.push({
         videoId,
         title: doc.meta?.title ?? videoId,
         translated: false,
-        queued,
-        ...(queued ? {} : { reason: untranslatableReason(doc) }),
+        queued: route !== 'reject',
+        ...(reason ? { reason } : {}),
+        ...(st ? { stage: st.stage, step: st.step, ...(st.failed ? { failed: true, failReason: st.failReason } : {}) } : {}),
       });
     }
   }
@@ -470,260 +482,3 @@ export async function listVideos(
   return out;
 }
 
-// Cron 佇列：掃 R2 找「有 source.json 但 bilingual.json 缺少或過期」的 Tier 2 影片，
-// 一次 cron 只翻一支（單支約 1–2 分鐘，避免 scheduled 事件跑太長）。
-// 併發保護：.translating 鎖檔，10 分鐘視為 stale。
-export async function translateNextPending(
-  env: PipelineEnv,
-  llmOverride?: LlmFn
-): Promise<{ translated?: string; status?: number; scanned: number }> {
-  const prefixes: string[] = [];
-  let cursor: string | undefined;
-  do {
-    const res = await env.SUBS.list({ prefix: 'subs/', delimiter: '/', cursor });
-    prefixes.push(...(res.delimitedPrefixes ?? []));
-    cursor = res.truncated ? res.cursor : undefined;
-  } while (cursor);
-
-  let scanned = 0;
-  for (const p of prefixes) {
-    const videoId = p.slice('subs/'.length).replace(/\/$/, '');
-    if (!/^[A-Za-z0-9_-]{11}$/.test(videoId)) continue;
-    scanned++;
-
-    const srcHead = await env.SUBS.head(`subs/${videoId}/source.json`);
-    if (!srcHead) continue;
-    const bilHead = await env.SUBS.head(`subs/${videoId}/bilingual.json`);
-    if (bilHead && bilHead.uploaded >= srcHead.uploaded) continue; // 已是最新
-
-    // 範圍先讀出來判斷，不符合直接跳過（不佔鎖、不進 pipeline）
-    const srcObj = await env.SUBS.get(`subs/${videoId}/source.json`);
-    if (!srcObj) continue;
-    const srcDoc = JSON.parse(await srcObj.text()) as { track: { languageCode: string; kind?: string | null } };
-    // 單片豁免標記（實驗用）：非英文 ASR 只有被明確標記的影片才放行，全域預設不變。
-    // 長工作必須走 cron —— 實測 waitUntil 在 686 cues 的日文 ASR 上被 Cloudflare 中止
-    const allowAnyAsr = !!(await env.SUBS.head(`subs/${videoId}/.allow-any-asr`));
-    if (!canTranslate(srcDoc) && !(allowAnyAsr && srcDoc.track.kind === 'asr' && !/^zh/i.test(srcDoc.track.languageCode || ''))) {
-      continue;
-    }
-
-    const lock = await env.SUBS.head(`subs/${videoId}/.translating`);
-    if (lock && Date.now() - lock.uploaded.getTime() < 10 * 60 * 1000) continue; // 有人在翻
-
-    await env.SUBS.put(`subs/${videoId}/.translating`, new Date().toISOString());
-    const startedAt = new Date().toISOString();
-    try {
-      // cron 的成敗也要落地 —— 否則 cron 失敗是完全看不見的（實測踩過：只能靠猜）
-      let record: Record<string, unknown>;
-      let status = 500;
-      try {
-        const r = await runPipeline(env, videoId, true, llmOverride, allowAnyAsr);
-        status = r.status;
-        record = { via: 'cron', startedAt, finishedAt: new Date().toISOString(), status, ...r.body };
-      } catch (e) {
-        record = {
-          via: 'cron',
-          startedAt,
-          finishedAt: new Date().toISOString(),
-          status,
-          ok: false,
-          error: e instanceof Error ? e.message : String(e),
-        };
-      }
-      await env.SUBS.put(`subs/${videoId}/last-run.json`, JSON.stringify(record, null, 2), {
-        httpMetadata: { contentType: 'application/json' },
-      });
-      return { translated: videoId, status, scanned };
-    } finally {
-      await env.SUBS.delete(`subs/${videoId}/.translating`);
-    }
-  }
-  return { scanned };
-}
-
-export async function runPipeline(
-  env: PipelineEnv,
-  videoId: string,
-  force: boolean,
-  llmOverride?: LlmFn,
-  // 實驗用旁路：允許非英文 ASR（僅手動 /translate?allowAnyAsr=1 會傳，cron 佇列永遠不傳）
-  // 用途：量測非英文 ASR 品質以驗證 append-01 §C 的假設，量完再決定是否開放預設
-  allowAnyAsr = false
-): Promise<{ status: number; body: Record<string, unknown> }> {
-  const t0 = Date.now();
-  const model = env.GEMINI_MODEL || 'gemini-3.5-flash';
-
-  const srcObj = await env.SUBS.get(`subs/${videoId}/source.json`);
-  if (!srcObj) return { status: 404, body: { ok: false, error: 'source.json 不存在，請先用 ext ingest' } };
-  const src = JSON.parse(await srcObj.text()) as SourceDoc;
-  const asrBypass = allowAnyAsr && src.track.kind === 'asr' && !/^zh/i.test(src.track.languageCode || '');
-  if (!canTranslate(src) && !asrBypass) {
-    return { status: 422, body: { ok: false, error: `不在範圍：${untranslatableReason(src)}` } };
-  }
-  const needRepair = src.track.kind === 'asr';
-  if (!llmOverride && !env.GEMINI_API_KEY) {
-    return { status: 500, body: { ok: false, error: '未設定 GEMINI_API_KEY secret' } };
-  }
-
-  // cache：同 (videoId, lang, model, promptVersion) 直接回舊結果
-  if (!force) {
-    const cached = await env.SUBS.get(`subs/${videoId}/bilingual.json`);
-    if (cached) {
-      const doc = JSON.parse(await cached.text()) as Record<string, unknown>;
-      if (doc.promptVersion === PROMPT_VERSION && doc.model === model && doc.sourceLang === src.track.languageCode) {
-        return { status: 200, body: { ok: true, cached: true, cueCount: (doc.cues as unknown[]).length } };
-      }
-    }
-  }
-
-  // 防重試失控（原則 §8）：呼叫數硬上限
-  let llmCalls = 0;
-  const baseLlm = llmOverride ?? (await import('./llm')).geminiGenerate.bind(null, env.GEMINI_API_KEY!, model);
-  let sentences = segmentCues(src.cues);
-  const chunkCount = chunkSentences(sentences).length;
-  const maxCalls = 6 + chunkCount * (needRepair ? 9 : 7); // 含切半分治的預算
-  const llm: LlmFn = (prompt) => {
-    if (++llmCalls > maxCalls) throw new Error(`LLM 呼叫超過上限 ${maxCalls} 次，中止（防重試失控）`);
-    return baseLlm(prompt);
-  };
-
-  let retries = 0;
-  let asrRepaired = 0;
-
-  // Phase 2.5 — Step A'：英文 ASR 修稿（在斷句之後、glossary 之前）
-  if (needRepair) {
-    const rChunks = chunkSentences(sentences);
-    const rOutcomes: Array<{ byId: Map<number, string>; retries: number }> = new Array(rChunks.length);
-    let rNext = 0;
-    await Promise.all(
-      Array.from({ length: Math.min(4, rChunks.length) }, async () => {
-        while (rNext < rChunks.length) {
-          const idx = rNext++;
-          rOutcomes[idx] = await repairChunk(llm, src.meta, rChunks[idx], src.track.languageCode);
-        }
-      })
-    );
-    const fixedById = new Map<number, string>();
-    for (const o of rOutcomes) {
-      retries += o.retries;
-      for (const [id, en] of o.byId) fixedById.set(id, en);
-    }
-    // 套用修稿 + deterministic 清洗；清完是空的（純 [music]/>> 雜訊句）整句移除
-    sentences = sentences.flatMap((s) => {
-      const cleaned = cleanAsrText(fixedById.get(s.id) ?? s.text);
-      if (!cleaned) {
-        asrRepaired++;
-        return [];
-      }
-      if (cleaned !== s.text) asrRepaired++;
-      return [{ ...s, text: cleaned }];
-    });
-  }
-
-  const chunks = chunkSentences(sentences);
-  await env.SUBS.put(`subs/${videoId}/sentences.json`, JSON.stringify({ videoId, asrRepaired, sentences }), {
-    httpMetadata: { contentType: 'application/json' },
-  });
-
-  // Step B — glossary（失敗重試一次，仍失敗就空表繼續並記 warning）
-  let glossary: GlossaryEntry[] = [];
-  const warnings: string[] = [];
-  for (let attempt = 0; attempt < 2; attempt++) {
-    try {
-      const parsed = cleanJson(await llm(buildGlossaryPrompt(src.meta, sentences, src.track.languageCode)));
-      if (!Array.isArray(parsed)) throw new Error('glossary 不是陣列');
-      glossary = parsed
-        .map(
-          (g): Partial<GlossaryEntry> => ({
-            term: g?.term,
-            zh: g?.zh ?? g?.suggested_zh, // 舊 schema 相容
-            note: typeof g?.note === 'string' && g.note.trim() ? g.note.trim().slice(0, 60) : undefined,
-          })
-        )
-        .filter((g): g is GlossaryEntry => typeof g.term === 'string' && typeof g.zh === 'string')
-        .slice(0, 60);
-      break;
-    } catch (e) {
-      if (attempt === 0) retries++;
-      else warnings.push(`glossary 失敗，以空表續跑：${e instanceof Error ? e.message : e}`);
-    }
-  }
-  await env.SUBS.put(`subs/${videoId}/glossary.json`, JSON.stringify({ videoId, model, glossary }), {
-    httpMetadata: { contentType: 'application/json' },
-  });
-
-  // Step C — 分塊翻譯，並發 4
-  const outcomes: ChunkOutcome[] = new Array(chunks.length);
-  let next = 0;
-  const workers = Array.from({ length: Math.min(4, chunks.length) }, async () => {
-    while (next < chunks.length) {
-      const idx = next++;
-      outcomes[idx] = await translateChunk(llm, src.meta, glossary, chunks[idx], src.track.languageCode);
-    }
-  });
-  await Promise.all(workers);
-
-  const byId = new Map<number, { zh: string; note?: string }>();
-  for (let i = 0; i < outcomes.length; i++) {
-    const o = outcomes[i];
-    retries += o.retries;
-    if (o.problems.length > 0) warnings.push(`chunk ${i + 1}/${outcomes.length}：${o.problems.join('；')}`);
-    for (const [id, v] of o.byId) byId.set(id, v);
-  }
-
-  // Step D — 組裝與驗證
-  const { cues, untranslated, bannedHits, extendedHits } = assembleBilingual(sentences, src.cues, byId);
-  if (untranslated > 0) warnings.push(`${untranslated} 句翻譯失敗，以英文原文代替（標 untranslated）`);
-  if (bannedHits.length > 0) warnings.push(`禁用詞殘留：${bannedHits.join('、')}`);
-  // hints 與 warnings 分開：報告層允許誤報，不能污染「warnings 必須為空」的驗收標準
-  const hints = extendedHits.length > 0 ? [`疑似中國用語（OpenCC 參考，僅提示）：${extendedHits.slice(0, 20).join('、')}`] : [];
-  const autoNotes = attachGlossaryNotes(cues, glossary);
-
-  const bilingual = {
-    videoId,
-    meta: src.meta,
-    sourceLang: src.track.languageCode,
-    tier: src.tier,
-    asrRepaired,
-    model,
-    promptVersion: PROMPT_VERSION,
-    generatedAt: new Date().toISOString(),
-    warnings,
-    hints,
-    cues,
-  };
-  await env.SUBS.put(`subs/${videoId}/bilingual.json`, JSON.stringify(bilingual), {
-    httpMetadata: { contentType: 'application/json' },
-  });
-  await env.SUBS.put(`subs/${videoId}/bilingual.srt`, toSrt(cues), {
-    httpMetadata: { contentType: 'text/plain; charset=utf-8' },
-  });
-  // 小的 info.json 給清單頁用（避免列清單時整包 bilingual 讀出來）
-  await env.SUBS.put(
-    `subs/${videoId}/info.json`,
-    JSON.stringify({
-      videoId,
-      title: src.meta.title,
-      channel: src.meta.channel,
-      durationSec: src.meta.durationSec,
-      cueCount: cues.length,
-      generatedAt: bilingual.generatedAt,
-    }),
-    { httpMetadata: { contentType: 'application/json' } }
-  );
-
-  const stats: PipelineStats = {
-    sentences: sentences.length,
-    chunks: chunks.length,
-    glossaryTerms: glossary.length,
-    asrRepaired,
-    autoNotes,
-    llmCalls,
-    retries,
-    untranslated,
-    warnings,
-    hints,
-    elapsedMs: Date.now() - t0,
-  };
-  return { status: 200, body: { ok: true, stats } };
-}
