@@ -228,6 +228,21 @@ describe('queue 步進（handleJob + FakeQueue）', () => {
     expect(calls).toBeGreaterThan(afterRepair); // 真的重打了
   });
 
+  it('?model= 本輪覆寫：整鏈用指定模型、bilingual.model 記錄之；預設輪不受影響', async () => {
+    const SUBS = new FakeR2();
+    const q = new FakeQueue();
+    const env = envOf(SUBS, q);
+    await SUBS.put('subs/ksfm6jeTg3Q/source.json', JSON.stringify(makeSource()));
+    await q.send({ videoId: 'ksfm6jeTg3Q', step: 'plan', model: 'fake-lite' });
+    await drain(q, env, fakeLlm);
+    expect(readJson(SUBS, 'subs/ksfm6jeTg3Q/bilingual.json').model).toBe('fake-lite');
+    expect((readJson(SUBS, 'subs/ksfm6jeTg3Q/status.json') as JobStatus).modelOverride).toBe('fake-lite');
+    // 之後不帶 model 的 force 重跑回到 env 預設
+    await q.send({ videoId: 'ksfm6jeTg3Q', step: 'plan', force: true });
+    await drain(q, env, fakeLlm);
+    expect(readJson(SUBS, 'subs/ksfm6jeTg3Q/bilingual.json').model).toBe('fake-model');
+  });
+
   it('source 跑到一半被重新 ingest → 步驟偵測版本不符，改排 plan 重來', async () => {
     const SUBS = new FakeR2();
     const env = envOf(SUBS);

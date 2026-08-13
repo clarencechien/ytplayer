@@ -6,9 +6,10 @@
   "observability": { "enabled": true },
   // ⚠ 模型選擇的單一事實來源在這裡：git 部署會用本檔的 vars 蓋掉 dashboard 的明文變數
   //（只有 Secret 倖存）— 在 dashboard 改模型會被下一次部署踩回來（2026-08-13 帳單事故成因之一）。
-  // gemini-3.6-flash：實測有據（2026-07-22~24 兩支影片，品質可）。想試更省的
-  // 3.6-flash-lite 改這裡 push 後拿一支短片驗證即可（ID 錯會 fail fast 不燒錢）。
-  "vars": { "GEMINI_MODEL": "gemini-3.6-flash" },
+  // gemini-3.5-flash + thinking 實質關閉 = 四組同片對決的贏家（docs/model-experiment.md）：
+  // 0 缺句、品質同思考版、tokens -31% 且輸出佔比從 3~4 倍降到 1/3。
+  // 3.6-flash 關思考後會「譯文對錯句」（禁用）；3.5-flash-lite 缺 27 句（只配重跑用 ?model= 指定）。
+  "vars": { "GEMINI_MODEL": "gemini-3.5-flash" },
   // cron = 零成本看門狗（migration.md §2）：只掃描 + enqueue，永不碰 LLM。
   // 2026-08-13 成本事故的三個修法（分段可續跑、嘗試上限、開工即寫狀態）都已落在 queue 步驟裡。
   "triggers": { "crons": ["*/5 * * * *"] },

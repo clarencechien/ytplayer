@@ -31,7 +31,9 @@ export interface Env {
   VIDEO_TOKEN_CAP?: string;
   WATCH_TOKEN_CAP?: string;
   DAILY_TOKEN_CAP?: string;
-  COST_NTD_PER_M?: string; // 費用估算費率：NT$/百萬 tokens（預設 30，對照帳單後調準）
+  COST_IN_NTD_PER_M?: string; // 輸入費率 NT$/M tokens（預設 47 ≈ $1.50×31）
+  COST_OUT_NTD_PER_M?: string; // 輸出費率 NT$/M tokens（預設 280 ≈ $9.00×31；thinking 計此價）
+  COST_NTD_PER_M?: string; // 舊：單一混合費率，設了就蓋過雙費率
   ALLOWED_EMAIL?: string; // Cloudflare Access 使用者白名單（/admin 的人用認證；程式仍用 key）
 }
 
@@ -106,7 +108,18 @@ export default {
     // 營運儀表板資料（admin 頁用）：所有 job 狀態 + 今日花費 + 費用估算。一頁看完，不通靈。
     if (req.method === 'GET' && path === '/jobs.json') {
       if (!authorized) return json({ ok: false, error: 'unauthorized' }, 403);
-      const rate = Number(env.COST_NTD_PER_M) > 0 ? Number(env.COST_NTD_PER_M) : 30; // NT$/百萬 tokens（估算，var 可調）
+      // 雙費率估算（NT$/百萬 tokens）：預設對應 gemini-3.5-flash 官方牌價 $1.50/$9.00 × 31 匯率
+      //（thinking 計輸出價 — 所以關思考省的都是貴的那種）。對照帳單後可用 vars 調準。
+      const inRate = Number(env.COST_IN_NTD_PER_M) > 0 ? Number(env.COST_IN_NTD_PER_M) : 47;
+      const outRate = Number(env.COST_OUT_NTD_PER_M) > 0 ? Number(env.COST_OUT_NTD_PER_M) : 280;
+      const rate = Number(env.COST_NTD_PER_M) > 0 ? Number(env.COST_NTD_PER_M) : 0; // 舊單費率：設了就蓋過雙費率
+      const est = (total: number, prompt?: number): number => {
+        const cost =
+          rate > 0 || prompt == null
+            ? (total / 1e6) * (rate || 140) // 無拆解資料時用混合費率（60/40 in-out ≈ 140）
+            : (prompt / 1e6) * inRate + ((total - prompt) / 1e6) * outRate;
+        return Math.round(cost * 100) / 100;
+      };
       const budget = await readDailyBudget(env);
       const dailyCap = Number(env.DAILY_TOKEN_CAP) > 0 ? Number(env.DAILY_TOKEN_CAP) : 2_000_000;
 
@@ -141,7 +154,7 @@ export default {
           tokensUsed: st.tokensUsed ?? 0,
           llmCalls: st.llmCalls ?? 0,
           thoughtTokens: st.thoughtTokens ?? 0,
-          estNTD: Math.round((((st.tokensUsed as number) ?? 0) / 1_000_000) * rate * 100) / 100,
+          estNTD: est((st.tokensUsed as number) ?? 0, st.promptTokens as number | undefined),
           startedAt: st.startedAt,
           updatedAt: st.updatedAt,
           warningCount: Array.isArray(st.warnings) ? st.warnings.length : 0,
@@ -153,12 +166,13 @@ export default {
 
       return json({
         ok: true,
-        rateNTDPerM: rate,
+        rateNTDPerM: rate > 0 ? rate : `in ${inRate} / out ${outRate}`,
         today: {
           tokens: budget.tokens,
           llmCalls: budget.calls,
           dailyCapTokens: dailyCap,
-          estNTD: Math.round((budget.tokens / 1_000_000) * rate * 100) / 100,
+          estNTD: est(budget.tokens), // 日預算檔沒有 in/out 拆解 → 混合費率
+
         },
         jobs,
       });
@@ -262,9 +276,20 @@ export default {
       const { route, reason } = routeSource(src);
       if (route === 'reject') return json({ ok: false, error: `不在範圍：${reason}` }, 422);
       const force = url.searchParams.get('force') === '1';
-      await env.JOBS.send({ videoId, step: 'plan', force });
+      // ?model= 本輪模型覆寫（A/B 測試用）：只影響這一輪，不動 wrangler 預設
+      const modelParam = url.searchParams.get('model') ?? undefined;
+      if (modelParam && !/^[a-z0-9.-]{3,50}$/i.test(modelParam)) {
+        return json({ ok: false, error: 'model 參數格式錯誤' }, 400);
+      }
+      await env.JOBS.send({ videoId, step: 'plan', force, ...(modelParam ? { model: modelParam } : {}) });
       return json(
-        { ok: true, accepted: videoId, force, note: '已排入翻譯佇列，進度請看 /subs/{videoId}/status.json' },
+        {
+          ok: true,
+          accepted: videoId,
+          force,
+          ...(modelParam ? { model: modelParam } : {}),
+          note: '已排入翻譯佇列，進度請看 /subs/{videoId}/status.json',
+        },
         202
       );
     }

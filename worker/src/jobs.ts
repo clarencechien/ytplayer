@@ -52,6 +52,7 @@ export interface JobMsg {
   batch?: number;
   force?: boolean;
   route?: 'video'; // plan 專用：走看片路線（無此欄位 = text）
+  model?: string; // plan 專用：本輪模型覆寫（A/B 測試用；整輪固定，記在 status.modelOverride）
 }
 
 // 一個 queue 批次步驟最多帶幾個 chunk（chunk=40 句）：4×40=160 句、併發 4，約 1–2 分鐘
@@ -78,6 +79,7 @@ export interface JobStatus {
   // token 流向拆解（帳單事故的診斷欄）：thinking 以輸出價計費，是成本大宗嫌疑犯
   promptTokens?: number;
   thoughtTokens?: number;
+  modelOverride?: string; // /translate?model= 指定的本輪模型（A/B 測試）
   failed?: boolean;
   failReason?: string;
   // video 路由專用：分段掃描狀態（kvsplayer 的失敗階梯/覆蓋接續都在這）
@@ -108,6 +110,10 @@ export interface WatchRequest {
   lang?: string; // 原文語言標籤，預設 ko
   title?: string;
 }
+
+// 本輪模型解析：status 覆寫 > env 預設。fallback 與 wrangler.jsonc 一致
+export const modelOf = (env: JobEnv, st?: JobStatus | null): string =>
+  st?.modelOverride || env.GEMINI_MODEL || 'gemini-3.6-flash';
 
 const num = (v: string | undefined, dflt: number): number => {
   const n = Number(v);
@@ -170,11 +176,12 @@ function makeStepLlm(
   env: JobEnv,
   meter: StepMeter,
   maxCalls: number,
-  llmOverride?: LlmFn
+  llmOverride?: LlmFn,
+  model?: string
 ): LlmFn {
-  const model = env.GEMINI_MODEL || 'gemini-3.5-flash';
+  model = model || env.GEMINI_MODEL || 'gemini-3.6-flash';
   // 翻譯/修稿是機械性 JSON 轉換，thinking 預設關（0）— 它以輸出價計費，實測是帳單大宗
-  const thinkingBudget = env.GEMINI_THINKING_BUDGET != null ? Number(env.GEMINI_THINKING_BUDGET) : 0;
+  const thinkingBudget = env.GEMINI_THINKING_BUDGET != null ? Number(env.GEMINI_THINKING_BUDGET) : 128;
   return async (prompt) => {
     if (++meter.calls > maxCalls) throw new Error(`單步 LLM 呼叫超過上限 ${maxCalls} 次，中止（防重試失控）`);
     if (llmOverride) return llmOverride(prompt);
@@ -188,7 +195,7 @@ function makeStepLlm(
         meter.prompt += u.prompt;
         meter.thoughts += u.thoughts;
       },
-      Number.isFinite(thinkingBudget) ? thinkingBudget : 0
+      Number.isFinite(thinkingBudget) ? thinkingBudget : 128
     );
   };
 }
@@ -343,7 +350,7 @@ async function watchStep(env: JobEnv, videoId: string, watchOverride?: WatchLlmF
     watchOverride ??
     makeGeminiWatch(
       env.GEMINI_API_KEY!,
-      env.GEMINI_MODEL || 'gemini-3.5-flash',
+      modelOf(env, st),
       env.GEMINI_MEDIA_RES || 'MEDIA_RESOLUTION_MEDIUM',
       (n) => {
         meter.tokens += n;
@@ -412,7 +419,7 @@ async function assembleVideoStep(env: JobEnv, videoId: string, st: JobStatus): P
   const banned = [...new Set(cues.flatMap((c) => scanBanned(c.zh)))];
   if (banned.length > 0) warnings.push(`禁用詞殘留：${banned.join('、')}`); // 看片重跑太貴，僅記錄不重試
 
-  const model = env.GEMINI_MODEL || 'gemini-3.5-flash';
+  const model = modelOf(env, st);
   const bilingual = {
     videoId,
     schema: 2,
@@ -468,8 +475,7 @@ async function assembleVideoStep(env: JobEnv, videoId: string, st: JobStatus): P
 
 // --- text 路由 ---
 
-async function planStep(env: JobEnv, videoId: string, force: boolean): Promise<StepResult> {
-  const model = env.GEMINI_MODEL || 'gemini-3.5-flash';
+async function planStep(env: JobEnv, videoId: string, force: boolean, modelOverride?: string): Promise<StepResult> {
   const srcHead = await env.SUBS.head(`subs/${videoId}/source.json`);
   if (!srcHead) return { status: 404, body: { ok: false, error: 'source.json 不存在，請先用 ext ingest' } };
   const src = await jsonGet<SourceDoc>(env, `subs/${videoId}/source.json`);
@@ -485,7 +491,8 @@ async function planStep(env: JobEnv, videoId: string, force: boolean): Promise<S
     const bilHead = await env.SUBS.head(`subs/${videoId}/bilingual.json`);
     if (bilHead && bilHead.uploaded >= srcHead.uploaded) {
       const doc = await jsonGet<Record<string, unknown>>(env, `subs/${videoId}/bilingual.json`);
-      if (doc && doc.promptVersion === PROMPT_VERSION && doc.model === model && doc.sourceLang === src.track.languageCode) {
+      const wantModel = modelOverride || env.GEMINI_MODEL || 'gemini-3.6-flash';
+      if (doc && doc.promptVersion === PROMPT_VERSION && doc.model === wantModel && doc.sourceLang === src.track.languageCode) {
         return { status: 200, body: { ok: true, cached: true, cueCount: (doc.cues as unknown[]).length } };
       }
     }
@@ -537,6 +544,7 @@ async function planStep(env: JobEnv, videoId: string, force: boolean): Promise<S
     thoughtTokens: carry?.thoughtTokens ?? 0,
     asrRepaired: 0,
     warnings: [],
+    ...(modelOverride || carry?.modelOverride ? { modelOverride: modelOverride || carry?.modelOverride } : {}),
   };
 
   if (needRepair) {
@@ -575,7 +583,7 @@ async function repairStep(env: JobEnv, videoId: string, batch: number, llmOverri
   const chunks = chunkSentences(pre.sentences).slice(batch * CHUNKS_PER_BATCH, (batch + 1) * CHUNKS_PER_BATCH);
 
   const meter: StepMeter = newMeter();
-  const llm = makeStepLlm(env, meter, chunks.length * 3 + 2, llmOverride);
+  const llm = makeStepLlm(env, meter, chunks.length * 3 + 2, llmOverride, modelOf(env, st));
   let retries = 0;
   const entries: Array<[number, string]> = [];
   const outcomes = await Promise.all(chunks.map((c) => repairChunk(llm, src.meta, c, src.track.languageCode)));
@@ -636,14 +644,14 @@ async function glossaryStep(env: JobEnv, videoId: string, llmOverride?: LlmFn): 
   const sentences = sentencesDoc.sentences;
   st.translateBatches = Math.ceil(chunkSentences(sentences).length / CHUNKS_PER_BATCH);
 
-  const model = env.GEMINI_MODEL || 'gemini-3.5-flash';
+  const model = modelOf(env, st);
   const meter: StepMeter = newMeter();
   let retries = 0;
 
   // 冪等：glossary 已是本輪產物就不重打
   const existing = await jsonGet<{ sourceUploaded?: string }>(env, `subs/${videoId}/glossary.json`);
   if (!existing || existing.sourceUploaded !== st.sourceUploaded) {
-    const llm = makeStepLlm(env, meter, 4, llmOverride);
+    const llm = makeStepLlm(env, meter, 4, llmOverride, modelOf(env, st));
     let glossary: GlossaryEntry[] = [];
     for (let attempt = 0; attempt < 2; attempt++) {
       try {
@@ -698,7 +706,7 @@ async function translateStep(env: JobEnv, videoId: string, batch: number, llmOve
   const chunks = allChunks.slice(batch * CHUNKS_PER_BATCH, (batch + 1) * CHUNKS_PER_BATCH);
 
   const meter: StepMeter = newMeter();
-  const llm = makeStepLlm(env, meter, chunks.length * 9 + 2, llmOverride); // 含切半分治與禁用詞重打的預算
+  const llm = makeStepLlm(env, meter, chunks.length * 9 + 2, llmOverride, modelOf(env, st)); // 含切半分治與禁用詞重打的預算
   let retries = 0;
   const entries: Array<[number, { zh: string; note?: string }]> = [];
   const problems: string[] = [];
@@ -732,7 +740,7 @@ async function assembleStep(env: JobEnv, videoId: string): Promise<StepResult> {
   if ('drop' in run) return { status: 200, body: { ok: false, dropped: run.drop } };
   if ('restart' in run) return { status: 202, body: { ok: true, restarted: true }, next: run.restart };
   const { st, src } = run;
-  const model = env.GEMINI_MODEL || 'gemini-3.5-flash';
+  const model = modelOf(env, st);
 
   const sentencesDoc = await jsonGet<{ sentences: Sentence[]; asrRepaired: number; sourceUploaded?: string }>(
     env,
@@ -835,7 +843,7 @@ export async function runStep(
     case 'plan':
       return msg.route === 'video'
         ? planVideoStep(env, msg.videoId, msg.force === true)
-        : planStep(env, msg.videoId, msg.force === true);
+        : planStep(env, msg.videoId, msg.force === true, msg.model);
     case 'repair':
       return repairStep(env, msg.videoId, msg.batch ?? 0, llmOverride);
     case 'glossary':
