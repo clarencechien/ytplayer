@@ -141,12 +141,28 @@ export interface ChunkOutcome {
   problems: string[];
 }
 
+// id 連號檢查（gemini-api-lessons §6：index-keyed batch JSON 要驗 id）—
+// 「id 對滑」會讓譯文通順卻對到錯句，自動品質指標測不到；重複與亂序是對滑的可偵測徵兆，
+// 一律整包丟掉觸發重試（3.6-flash 實測踩過，這是它重新上場的前提檢查）
+function assertIdSanity(arr: unknown[]): void {
+  const seen = new Set<number>();
+  let prev = -Infinity;
+  for (const it of arr as Array<{ id?: unknown }>) {
+    if (typeof it?.id !== 'number') continue;
+    if (seen.has(it.id)) throw new Error(`輸出 id 重複（#${it.id}）— 疑似批次對滑`);
+    seen.add(it.id);
+    if (it.id < prev) throw new Error(`輸出 id 亂序（#${it.id} 出現在 #${prev} 之後）— 疑似批次對滑`);
+    prev = it.id;
+  }
+}
+
 function parseChunkOutput(
   raw: string,
   targets: Map<number, string> // id → 原文（fail-fast 檢查用）
 ): { byId: Map<number, { zh: string; note?: string }>; rejected: string[] } {
   const arr = cleanJson(raw);
   if (!Array.isArray(arr)) throw new Error('輸出不是 JSON 陣列');
+  assertIdSanity(arr);
   const byId = new Map<number, { zh: string; note?: string }>();
   const rejected: string[] = [];
   for (const it of arr) {
@@ -194,6 +210,7 @@ export async function repairChunk(
   const parse = (raw: string): Map<number, string> => {
     const arr = cleanJson(raw);
     if (!Array.isArray(arr)) throw new Error('輸出不是 JSON 陣列');
+    assertIdSanity(arr); // 修稿同樣是 index-keyed batch，同樣要防 id 對滑
     const byId = new Map<number, string>();
     for (const it of arr) {
       if (it && typeof it.id === 'number' && expected.has(it.id) && typeof it.en === 'string' && it.en.trim()) {

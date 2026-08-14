@@ -60,6 +60,7 @@ async function main() {
     SUBS: SUBS as unknown as R2Bucket,
     GEMINI_API_KEY: apiKey,
     GEMINI_MODEL: model,
+    ...(process.env.CHUNK_SIZE ? { CHUNK_SIZE: process.env.CHUNK_SIZE } : {}),
   } as JobEnv;
 
   const t0 = Date.now();

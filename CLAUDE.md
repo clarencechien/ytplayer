@@ -30,5 +30,7 @@
 
 - M5：關閉 kvsplayer（刪 Worker/queue、30 天後刪 kvs-krsub、移除 KVS 綁定與 migrate.ts）
 - glossary 疊層（channel/genre/per-video）：計畫在 [docs/glossary-layers.md](docs/glossary-layers.md)，未實作
-- lite 級翻譯再戰：縮小 chunk（20 句）重測 3.5-flash-lite（缺句可能是 batch 協定問題）
-- 3.6-flash 的 batch id 對滑：加 id 連號檢查後才可再評估
+- ~~lite 縮 chunk 再戰~~：**已測否決**（2026-08-14，E 組缺句反而更多 — 病根是 index-keyed
+  協定對 lite 的 id 紀律要求，換協定才有救，見 model-experiment.md）
+- ~~id 連號檢查~~：**已實作**（`assertIdSanity` — 重複/亂序整包打回重試）；
+  3.6-flash 若要重新評估，前提已備妥，但仍需同料 A/B + 抽樣人工比對

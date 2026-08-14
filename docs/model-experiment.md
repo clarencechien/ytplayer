@@ -42,6 +42,20 @@
 - 3.6-flash 若要複用需先解 id 錯位（例如縮小 chunk、或加 id 連號檢查）— 記為 future work
 - 帳單校準：等 Google 帳單出來後把儀表板 `COST_NTD_PER_M` 調成真實費率
 
+## 追加：E 組 — lite + 縮 chunk 20（2026-08-14，假說否決）
+
+「lite 缺句是 40 句大 batch 的協定問題」的驗證結果：**否**。
+
+| | B：lite + chunk 40 | E：lite + chunk 20（+ id 連號檢查上線後）|
+|---|---|---|
+| untranslated | 27 | **30（更糟）** |
+| 失敗形狀 | 缺句零星 | **整 chunk 歸零**（連切半分治都救不回）|
+| tokens | 187,654 | 212,994（chunk 變小 → overlap/prompt 攤提變多）|
+
+判讀：id 連號檢查上線後，lite 的輸出頻繁因**重複/亂序 id** 被整包打回 — 病根是
+index-keyed 協定對 lite 的 id 紀律要求太高，縮 chunk 無解。lite 要再戰需要**換協定**
+（如按位置對齊的純陣列輸出），記為 future idea，不再投入。**預設維持 3.5-flash + 關思考。**
+
 ## 外部資料驗證（2026-08-13 網路查證）
 
 | 模型 | 輸入 $/M | 輸出 $/M（thinking 計此價）| 對照我們的實驗 |
