@@ -58,7 +58,7 @@ Caption track 有四個層級，每層是不同的題目（詳見 [docs/handoff-
 - **隱私**：全站 noindex（含 robots.txt 不 Disallow 的陷阱解法）；清單 key-gate；
   `/watch` 公開可分享（已接受的殘餘風險記錄在 [docs/migration.md](docs/migration.md) §5）
 
-prompt 目前 **v4**；worker 測試 **87 個**。品質防線與所有實證教訓見
+prompt 目前 **v4**；worker 測試 **97 個**。品質防線與所有實證教訓見
 **[docs/lessons-learned.md](docs/lessons-learned.md)**；合併決策材料見
 [docs/kvsplayer-merge-todo.md](docs/kvsplayer-merge-todo.md)。
 glossary 目前 text 路由 by video 自動抽、video 路由 by language 靜態表 —
@@ -92,7 +92,7 @@ video 路由的影片另有**字卡層**（🃏 疊畫面上緣、逐句稿有�
 | [docs/glossary-layers.md](docs/glossary-layers.md) | Glossary 疊層計畫（channel/genre/per-video，未實作） |
 | [docs/subtitle-timing.md](docs/subtitle-timing.md) | 字幕時間軸：病因與修法（A 詞級斷句 + B 顯示鏈接，已實作） |
 | [docs/model-experiment.md](docs/model-experiment.md) | 模型對決四組實測（3.5-flash+關思考勝出）+ 官方牌價外部驗證 |
-| [docs/gemini-api-lessons.md](docs/gemini-api-lessons.md) | **Gemini API 跨專案教訓**（thinking 稅/相容矩陣/保險絲——給 kikemu/sukemi/manemu 帶走） |
+| [docs/gemini-api-lessons.md](docs/gemini-api-lessons.md) | **Gemini API 跨專案教訓 v2.3（canonical）**：thinking 稅／模型 A-B 方法論／官方牌價／保險絲四層；kikemu・sukemu・manemu 實測數據已回填 |
 | [docs/phase0-findings.md](docs/phase0-findings.md) | Phase 0 實測結論（POT、CORS、SPA stale…） |
 | [docs/phase1-plan.md](docs/phase1-plan.md) / [docs/phase2-plan.md](docs/phase2-plan.md) | 各階段實作計畫 |
 | [docs/asr-language-experiment.md](docs/asr-language-experiment.md) | 非英文 ASR 實測 + 成本事故解剖 + 端到端驗證 |
