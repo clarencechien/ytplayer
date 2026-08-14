@@ -101,6 +101,7 @@ export interface JobEnv {
   VIDEO_TOKEN_CAP?: string; // text 路由每片 token 上限（保險絲第 3 層），預設 500k
   WATCH_TOKEN_CAP?: string; // video 路由每片上限，預設 3M（看片 ≈ 300 tok/秒，30 分鐘 ≈ 54 萬 + 重試餘裕）
   DAILY_TOKEN_CAP?: string; // 每日全域 token 上限（第 4 層），預設 2M
+  CHUNK_SIZE?: string; // 每 chunk 句數，預設 40（lite 級模型建議 20 — gemini-api-lessons §2）
 }
 
 // video 路由的 ingest 請求檔（admin 貼連結 / API 建立）
@@ -110,6 +111,11 @@ export interface WatchRequest {
   lang?: string; // 原文語言標籤，預設 ko
   title?: string;
 }
+
+const chunkSize = (env: JobEnv): number => {
+  const n = Number(env.CHUNK_SIZE);
+  return Number.isFinite(n) && n >= 10 && n <= 100 ? n : 40;
+};
 
 // 本輪模型解析：status 覆寫 > env 預設。fallback 與 wrangler.jsonc 一致
 export const modelOf = (env: JobEnv, st?: JobStatus | null): string =>
@@ -526,7 +532,7 @@ async function planStep(env: JobEnv, videoId: string, force: boolean, modelOverr
   const needRepair = src.track.kind === 'asr';
   const sentences = segmentCues(src.cues);
   if (sentences.length === 0) return { status: 422, body: { ok: false, error: '沒有可翻譯的句子' } };
-  const chunkCount = chunkSentences(sentences).length;
+  const chunkCount = chunkSentences(sentences, chunkSize(env)).length;
 
   const st: JobStatus = {
     videoId,
@@ -580,7 +586,7 @@ async function repairStep(env: JobEnv, videoId: string, batch: number, llmOverri
   if (!pre || pre.sourceUploaded !== st.sourceUploaded) {
     return { status: 202, body: { ok: true, restarted: true }, next: { videoId, step: 'plan' } };
   }
-  const chunks = chunkSentences(pre.sentences).slice(batch * CHUNKS_PER_BATCH, (batch + 1) * CHUNKS_PER_BATCH);
+  const chunks = chunkSentences(pre.sentences, chunkSize(env)).slice(batch * CHUNKS_PER_BATCH, (batch + 1) * CHUNKS_PER_BATCH);
 
   const meter: StepMeter = newMeter();
   const llm = makeStepLlm(env, meter, chunks.length * 3 + 2, llmOverride, modelOf(env, st));
@@ -642,7 +648,7 @@ async function glossaryStep(env: JobEnv, videoId: string, llmOverride?: LlmFn): 
   }
   if (!sentencesDoc) return { status: 202, body: { ok: true, restarted: true }, next: { videoId, step: 'plan' } };
   const sentences = sentencesDoc.sentences;
-  st.translateBatches = Math.ceil(chunkSentences(sentences).length / CHUNKS_PER_BATCH);
+  st.translateBatches = Math.ceil(chunkSentences(sentences, chunkSize(env)).length / CHUNKS_PER_BATCH);
 
   const model = modelOf(env, st);
   const meter: StepMeter = newMeter();
@@ -702,7 +708,7 @@ async function translateStep(env: JobEnv, videoId: string, batch: number, llmOve
   if (!sentencesDoc || sentencesDoc.sourceUploaded !== st.sourceUploaded || !glossaryDoc) {
     return { status: 202, body: { ok: true, restarted: true }, next: { videoId, step: 'plan' } };
   }
-  const allChunks = chunkSentences(sentencesDoc.sentences);
+  const allChunks = chunkSentences(sentencesDoc.sentences, chunkSize(env));
   const chunks = allChunks.slice(batch * CHUNKS_PER_BATCH, (batch + 1) * CHUNKS_PER_BATCH);
 
   const meter: StepMeter = newMeter();
@@ -817,7 +823,7 @@ async function assembleStep(env: JobEnv, videoId: string): Promise<StepResult> {
 
   const stats: PipelineStats = {
     sentences: sentences.length,
-    chunks: chunkSentences(sentences).length,
+    chunks: chunkSentences(sentences, chunkSize(env)).length,
     glossaryTerms: glossaryDoc.glossary.length,
     asrRepaired: sentencesDoc.asrRepaired,
     autoNotes,

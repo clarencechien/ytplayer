@@ -192,10 +192,15 @@ describe('translateChunk', () => {
     expect(r.problems.join(' ')).toContain('缺');
   });
 
-  it('多餘的 id 與空 zh 被丟棄', async () => {
-    const llm = async () => '[{"id":0,"zh":"零"},{"id":1,"zh":"一"},{"id":99,"zh":"多的"},{"id":1,"zh":""}]';
+  it('多餘的 id 與空 zh 被丟棄（重試補齊）；重複 id 屬對滑徵兆由連號檢查擋', async () => {
+    let n = 0;
+    const llm = async () =>
+      n++ === 0
+        ? '[{"id":0,"zh":"零"},{"id":1,"zh":""},{"id":99,"zh":"多的"}]'
+        : '[{"id":0,"zh":"零"},{"id":1,"zh":"一"}]';
     const r = await translateChunk(llm, meta, [], chunk);
     expect([...r.byId.keys()].sort()).toEqual([0, 1]);
+    expect(r.retries).toBe(1);
   });
 });
 
@@ -311,5 +316,36 @@ describe('assembleBilingual + toSrt', () => {
   it('SRT：中上英下、時間格式正確', () => {
     const srt = toSrt([{ start: 1, end: 5, en: 'hello world.', zh: '哈囉世界。' }]);
     expect(srt).toBe('1\n00:00:01,000 --> 00:00:05,000\n哈囉世界。\nhello world.\n');
+  });
+});
+
+describe('id 連號檢查（批次對滑防線 — gemini-api-lessons §6）', () => {
+  const sentences = (n: number): Sentence[] =>
+    Array.from({ length: n }, (_, i) => ({ id: i, text: `Sentence number ${i} is here.`, cueIds: [i] }));
+  const meta = { title: 't', channel: 'c', description: '' };
+
+  it('輸出 id 重複 → 整包丟掉觸發重試；重試正常則收下', async () => {
+    let attempt = 0;
+    const llm = async () => {
+      attempt++;
+      if (attempt === 1) return '[{"id":0,"zh":"甲句翻譯"},{"id":0,"zh":"乙句翻譯"},{"id":2,"zh":"丙句翻譯"}]';
+      return '[{"id":0,"zh":"甲句翻譯"},{"id":1,"zh":"乙句翻譯"},{"id":2,"zh":"丙句翻譯"}]';
+    };
+    const chunk = { before: [], target: sentences(3), after: [] };
+    const r = await translateChunk(llm, meta, [], chunk);
+    expect(r.byId.size).toBe(3);
+    expect(r.retries).toBeGreaterThanOrEqual(1);
+  });
+
+  it('輸出 id 亂序 → 同樣丟掉（對滑的徵兆）；修稿 parse 同規則', async () => {
+    const badOrder = async () => '[{"id":2,"zh":"丙"},{"id":0,"zh":"甲"},{"id":1,"zh":"乙"}]';
+    const chunk = { before: [], target: sentences(3), after: [] };
+    const r = await translateChunk(badOrder, meta, [], chunk);
+    expect(r.byId.size).toBe(0); // 兩輪都亂序 → 全缺，problems 記錄
+    expect(r.problems.join('')).toContain('亂序');
+
+    const badRepair = async () => '[{"id":1,"en":"b"},{"id":0,"en":"a"}]';
+    const rr = await repairChunk(badRepair, meta, { before: [], target: sentences(2), after: [] });
+    expect(rr.byId.size).toBe(0);
   });
 });
