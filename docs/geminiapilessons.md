@@ -3,6 +3,7 @@
 > 2026-08-13 初版整理自 ytplayer + kvsplayer 的帳單事故與四組模型實驗。
 > **v2（同日）：經官方文件與社群查證，並回填 kikemu / sukemu / manemu 三個姊妹專案的實測數據。**
 > **v2.1（2026-08-14）：加入 gemini-3.7-flash（8/13 發布）查證結論 — 促銷半價、無 minimal 檔、翻譯行為零數據。**
+> **v2.2（2026-08-14）：ytplayer 稽核回填 — id 連號檢查已實作；「lite 縮 chunk 再戰」實測否決（E 組）。**
 > 寫給下一個用 Gemini 的專案：把這頁複製過去或直接引用，不要再用一次 NT$2000 學同樣的課。
 > 詳細數據：[model-experiment.md](model-experiment.md)、[asr-language-experiment.md](asr-language-experiment.md) §4。
 > 各 repo 專屬摘要：manemu / sukemu / kikemu 各自的 `docs/gemini-api-lessons.md`（本頁 §7 有現況表）。
@@ -133,7 +134,7 @@
 
 | 專案 | 狀態 | Gemini 用法 | 保險絲 | 重點風險/待辦 |
 |---|---|---|---|---|
-| **ytplayer** | 本 repo，active | text 路由（3.5-flash 思考關）+ video 路由（MEDIUM 300 tok/s）| 四層完備 | lite 縮 chunk 再戰；3.6 需 id 連號檢查 |
+| **ytplayer** | 本 repo，active | text 路由（3.5-flash 思考關）+ video 路由（MEDIUM 300 tok/s）| 四層完備 | ~~id 連號檢查~~ **已實作**（重複/亂序整包重試）；~~lite 縮 chunk~~ **已測否決**（chunk 20 缺句 30>27，病根是 index-keyed 協定的 id 紀律，換協定才有救）|
 | **kvsplayer（ytpoc）** | 已併入 ytplayer，待關閉 | 看片配方全數移植 | — | M5 關閉作業 |
 | **manemu** | 封測上線 | Live API 為主（3.1-flash-live + 口譯 prompt）；backtranslate 走 3.5-flash-lite | 秒數配額完備；**無 token/全域保險絲**（m3-spec 規格有、未實作）| backtranslate 未設 thinking（p50 3.3s 疑為 thinking 稅）；synth 失敗會**升級到 pro 模型**重試 |
 | **sukemu** | active | 3.6-flash 兩段式（P1 vision + HIGH res / P2 text）；thinking 未設（預設 medium）| 每人每日張數配額；**無成本上限、無全站日預算、P2 無配額檢查** | P2 是 index-keyed batch JSON（id 對滑未驗）；P2 可試 thinking minimal |
