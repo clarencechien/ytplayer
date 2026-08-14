@@ -1,14 +1,16 @@
-# Gemini API 實戰教訓（跨專案通用）v2.3
+# Gemini API 實戰教訓（跨專案通用）v2.4
 
 > 2026-08-13 初版整理自 ytplayer + kvsplayer 的帳單事故與四組模型實驗。
 > **v2（同日）：經官方文件與社群查證，並回填 kikemu / sukemu / manemu 三個姊妹專案的實測數據。**
 > **v2.1（2026-08-14）：加入 gemini-3.7-flash（8/13 發布）查證結論 — 促銷半價、無 minimal 檔、翻譯行為零數據。**
 > **v2.2（2026-08-14）：ytplayer 稽核回填 — id 連號檢查已實作；「lite 縮 chunk 再戰」實測否決（E 組）。**
 > **v2.3（2026-08-14）：與早期 ytplayer 版合併為單一檔案。本檔是 canonical（姊妹 repo 的摘要版都連到這個路徑）。**
+> **v2.4（2026-08-14）：三個姊妹 repo 當日實驗回填 — `budget:128` 通吃說被 kikemu 推翻（`thinkingLevel:"minimal"` 才是唯一實測歸零的旋鈕）；sukemu P1/P2 A/B 成對反例 + A/B 方法論兩條必要控制；座標回退更正為 thinking 檔位效應。**
 > 寫給下一個用 Gemini 的專案：把這頁複製過去或直接引用，不要再用一次 NT$2000 學同樣的課。
 > 詳細數據：[model-experiment.md](model-experiment.md)、[asr-language-experiment.md](asr-language-experiment.md) §4。
-> 各 repo 專屬摘要：manemu / sukemu / kikemu 各自的 `docs/gemini-api-lessons.md`（本頁 §7 有現況表）；
-> 三份摘要草稿放在本 repo 的 `docs/{kikemu,sukemu,manemu}geminilessons.md`，待搬進各自 repo。
+> 各 repo 專屬摘要**已各自入庫**（2026-08-14）：kikemu/sukemu `docs/gemini-api-lessons.md`、
+> manemu `live-translate-poc/docs/gemini-lessons-manemu.md`（本頁 §7 有現況表）。
+> 本 repo 的三份草稿 `docs/{kikemu,sukemu,manemu}geminilessons.md` 已完成任務，**2026-08-14 已刪**。
 
 ---
 
@@ -27,19 +29,41 @@
 - **Thinking 下限逐代升高（趨勢，2026-08-14 確認）**：3.5-flash 可 budget 0 → 3.6-flash 拒收 0 →
   **3.7-flash 連 `minimal` 都不支援（官方 model 頁：僅 low/medium/high）** —
   機械性任務的「關思考」策略在 3.7 上**不可用**，最低只有 low（稅率未實測）。
-  這是把機械任務留在 3.5-flash（budget 128）或 lite 級的獨立理由，與品質無關
-- **相容性陷阱（本 repo 實測，官方未文件化）**：`budget: 0` 在 3.5-flash 可、3.6-flash 拒收（400 generic）；
-  `budget: 128` 兩者通吃且實際 thoughts=0 → 跨模型預設 **`thinkingLevel: "minimal"`（官方路線）
-  或維持 budget 128**，都要備 400 fallback（拿掉 thinkingConfig 重試）；永遠不要 budget + level 同時給
+  這是把機械任務留在 3.5-flash（minimal）或 lite 級的獨立理由，與品質無關
+- **定案旋鈕：`thinkingLevel: "minimal"`，不要用 `thinkingBudget`（v2.4 更正）**。
+  kikemu 用凍結口譯 prompt 同料 A/B（2026-08-14）推翻了本檔早期的「budget 128 兩者通吃且 thoughts=0」：
+
+  | thinkingConfig | 3.5-flash | 3.6-flash |
+  |---|---|---|
+  | （不設） | 29.1× | 29.6× |
+  | `thinkingLevel: "minimal"` | **0×** ✅ | **0×** ✅ |
+  | `thinkingBudget: 128` | **18.5×** ❌ | **12.0×** ❌ |
+  | `thinkingBudget: 0` | 0× | 400 拒收 |
+  | level + budget 同給 | 400「only one of thinking budget and thinking level」| 同左 |
+
+  **`thinkingBudget` 是預算不是硬上限**，實際 thoughts 可以超過它；ytplayer 早前在自己任務上
+  量到 budget 128 → thoughts=0，是**任務形狀相依的巧合，不可依賴**。
+  **ytplayer 獨立複驗（2026-08-14，真實 10 句日譯中 prompt，3.5-flash）**：不設 → thoughts 1909（5.5×）、
+  `budget:128` → thoughts **507**（1.5×）、`level:"minimal"` → **0**、`budget:0` → 0。
+  早前的 0 是用玩具 prompt（「回覆 JSON: {ok:1}」）量的 —— **玩具 prompt 量不出 thinking 稅，
+  一定要用生產 prompt 複驗**。ytplayer 已於同日改為 `thinkingLevel:"minimal"`。
+  minimal 品質無退化（kikemu 三句抽樣人工比對，專名/台灣用語皆正確）。
+  一律備 400 fallback（拿掉 thinkingConfig 重試）；budget 與 level 永不同時給
 - **機械性任務（翻譯、格式轉換、抽取、分類）一律關思考**。效果實測：同片同 prompt 關思考 tokens **-31%**
-- **kikemu 回填的硬數據**（自家 usageMetadata，之前沒人看）：逐句翻譯 thoughts/output 比 **3–8 倍**
-  （最糟 8.3×）；judge 用 pro 級 18×；`gemini-flash-lite-latest` 同工作 thoughts=0；
-  **Live API 路徑 thoughts=0** — thinking 稅是 generateContent 的問題，不是 Live 的
-- **新陷阱：thinking token 會吃 `maxOutputTokens` 額度** → JSON 尾端被截斷
-  （kikemu 設 16384 仍截斷）。看到截斷先懷疑 thinking 佔額度，不要急著怪輸出太長
-- **反例（sukemu）**：視覺空間任務（bounding box 定位）是 reasoning-shaped，關思考要先 A/B —
-  「關思考」的界線用**任務形狀**判斷，不是無腦全關。兩段式設計（P1 視覺 / P2 純文字）
-  可以讓「該想的」與「機械的」分開計價，重試也不用重付圖片 token
+- **kikemu 回填的硬數據**：歷史 usageMetadata 逐句翻譯 thoughts/output **3–8 倍**（最糟 8.3×）、
+  逐句凍結 prompt A/B 更高達 **29×**；judge 用 pro 級 18×；`gemini-flash-lite-latest` 同工作 thoughts=0；
+  **Live API 路徑 thoughts=0**（108+ 次實測）— thinking 稅是 generateContent 的問題，不是 Live 的
+- **已證實機制：thinking token 會吃 `maxOutputTokens` 額度** → JSON 尾端被截斷。
+  kikemu 對照實驗（同 prompt，`maxOutputTokens: 300`）：預設思考 → thoughts 287 / output **9** /
+  finishReason=MAX_TOKENS（JSON 壞掉）；minimal → thoughts 0 / output 206 / STOP（JSON 完整）。
+  看到截斷先懷疑 thinking 佔額度，不要急著怪輸出太長
+- **成對反例（sukemu，同專案兩趟結論相反，ADR 0002）**：「關思考」的決策單位是**趟**，不是專案 —
+  P2（JSON 進出改寫，機械）降 minimal：12.0s→2.8s、tokens **-81%**、NT$0.56→0.13，
+  修訂反而更多更細、id 全數有效 ✅；P1（bounding box 定位，reasoning-shaped）降 minimal：
+  框「穩定地歪」（橫向漂移、跨欄）且座標規格掉回 0–1000 → **維持預設** ❌。
+  兩段式設計（P1 視覺 / P2 純文字）讓「該想的」與「機械的」分開計價，重試也不用重付圖片 token。
+  reasoning-shaped 的判斷也適用呼叫粒度：kikemu 的 researchTerms（自主決定查什麼）不關、
+  translateSentence / extractVocab（機械）關
 
 ## 2. 模型選擇：用同片 A/B，不要用印象
 
@@ -57,8 +81,17 @@
   但「batch id 對滑」**尚無公開報告** — 這是我們自己的發現，抽樣人工比對仍是必要程序
 - **定價倒掛**：3.6-flash 輸出 $7.50 **比** 3.5-flash 的 $9.00 便宜、輸入同 $1.50 —
   便宜不等於可用，換模型永遠先同料 A/B
-- **反向資料點（sukemu）**：視覺任務上 3.6-flash 勝過 3.5-flash-lite（lite 有 box 漂移、多語黏連）—
-  任務不同結論就不同；但 sukemu P2 正是 index-keyed batch JSON，同款 id 對滑風險**未驗證**
+- **反向資料點（sukemu）**：視覺任務上 3.6-flash 勝過 3.5-flash-lite（lite 有 box 漂移、多語黏連 —
+  且框漂移事後證實主因是 **thinking 不足**，不只是模型級別，見 §6）；
+  P2 的 id 對滑風險已補「範圍 + 去重 + t 回聲對位」三道防線（見 §6）
+- **A/B 方法論的兩條必要控制（sukemu P1 實驗差點翻車，v2.4 新增）**：
+  1. **先量同設定的自然變異，再談差異** — baseline 自己重跑兩次 IoU 只有 0.571，
+     比候選對 baseline 的 0.875 還低：變異比訊號大時，**n=1 的比較會給出相反的結論**。
+     凡是「候選 vs 基準」的分數，都要先有「基準 vs 基準」的分數當尺（同設定至少重複 3 次）
+  2. **一致 ≠ 正確，數字要配目視/抽樣人工比對** — minimal 在所有量化指標上更好
+     （框數 11/11/11、組內 IoU 更高），把框疊回照片才看見它「每次都用同樣的方式歪掉」。
+     高一致性可能來自**穩定地錯**，與 id 對滑同一母題：輸出看起來很好、對到錯的東西，
+     自動指標測不出來
 - **3.7-flash（2026-08-13 發布，三個月內第三款 flash；本表 2026-08-14 查證）**：
   AA 智慧指數 56（+4 vs 3.6）、340 tok/s（同級最快）、1M ctx、輸出上限 65,536；
   多模態輸入齊全（text/image/video/audio/PDF，輸出僅 text）；**不支援 Live API**。
@@ -89,7 +122,10 @@
 - **`gemini-3.6-flash-lite` 確認不存在**（models / pricing 頁皆無；3.7 也沒有 lite — lite 級停在 3.5）—
   「聽起來應該有」的 ID 一律先 `GET /v1beta/models` 驗證（kikemu 也踩過：`gemini-3-pro-preview` 曾 404）
 - 抄成本表時對準模型級別：kikemu 曾把 3.5-flash 抄成 lite 價（$0.30/$2.50），
-  **成本低估 3.6 倍**且一路寫進 PRD 與儀表板 — 牌價永遠附 URL 與查價日期
+  **成本低估 3.6 倍**且一路寫進 PRD 與儀表板（**2026-08-14 已修**，修正+關思考後兩跳 $0.35/hr）—
+  牌價永遠附 URL 與查價日期
+- **內建價表/單位經濟刻意用牌價，不用促銷價**（sukemu 定的規矩）：保險絲寧可高估；
+  要對齊實際帳單用可覆寫的價表變數（如 `MODEL_PRICES`）
 
 ## 4. 設定管理陷阱（Cloudflare Workers 特有）
 
@@ -129,21 +165,26 @@
   （簡體字形表、原文照抄、長度異常）、崩塌偵測（同譯文 ≥3 次）
 - 缺句處理：重試 → 切半分治（對付截斷與毒句）→ 仍缺標 `untranslated` 顯示原文（**可見的失敗**優於沉默）
 - 禁用詞三層：prompt 對照表（付 token，精簡）→ 執法掃描（低誤報，觸發重譯）→ 大詞表（僅提示）
-- **座標/數值格式指示會被無視**（sukemu 實測）：叫模型輸出指定座標格式，它照樣回退 0–1000
-  訓練慣例（lite 最嚴重）→ 從值域反推實際格式，不要相信宣稱
-- **index-keyed batch JSON 要驗 id**：連號檢查 + 抽樣人工比對（§2 的 id 對滑，自動指標測不到）
+- **座標/數值格式指示會被無視 — 主因是 thinking 檔位（v2.4 更正歸因）**：sukemu 實測同一個
+  3.6-flash，`low`/`minimal` 一律把座標掉回 0–1000 訓練慣例、`default`/`high` 不會 —
+  先前歸咎「lite 比較笨」的框漂移其實是 **thinking 不足的效應**。
+  → 規則：**模型不照 prompt 的格式指示時，先檢查 thinking 檔位再換模型**；
+  防禦仍然要有（從值域反推實際格式，不要相信宣稱）
+- **index-keyed batch JSON 要驗 id，防線三層**：id 連號/範圍/去重檢查（ytplayer `assertIdSanity`，
+  重複/亂序整包打回重試）→ **回聲對位**（sukemu：要求每筆帶原文前 8 字的 `t` 欄位回聲，
+  對不上丟棄該筆 — 寧缺勿錯）→ 抽樣人工比對（§2 的 id 對滑，自動指標測不到）
 - 長工作放對執行環境：CF Worker 的 fetch handler（含 waitUntil）跑不完分鐘級工作，
   只有 scheduled/queue consumer 可以 — Queues 分步自我續鏈 + 冪等 checkpoint 是正解
 
-## 7. 各專案現況（記憶同步區，2026-08-13 已實地盤點）
+## 7. 各專案現況（記憶同步區，2026-08-14 各 repo 落地後更新）
 
 | 專案 | 狀態 | Gemini 用法 | 保險絲 | 重點風險/待辦 |
 |---|---|---|---|---|
-| **ytplayer** | 本 repo，active | text 路由（3.5-flash 思考關）+ video 路由（MEDIUM 300 tok/s）| 四層完備 | ~~id 連號檢查~~ **已實作**（重複/亂序整包重試）；~~lite 縮 chunk~~ **已測否決**（chunk 20 缺句 30>27，病根是 index-keyed 協定的 id 紀律，換協定才有救）|
+| **ytplayer** | 本 repo，active | text 路由（3.5-flash 思考關）+ video 路由（MEDIUM 300 tok/s）| 四層完備 | ~~id 連號檢查~~ **已實作**（`assertIdSanity`）；~~lite 縮 chunk~~ **已測否決**（E 組，換協定才有救）；~~thinking 改 level~~ **已改**（`thinkingLevel:"minimal"`，`GEMINI_THINKING_LEVEL` var 可調、budget 留 legacy 逃生口；生產 prompt 複驗 507→0）；video 路由刻意維持預設 thinking（reasoning-shaped，程式碼已立碑）|
 | **kvsplayer（ytpoc）** | 已併入 ytplayer，待關閉 | 看片配方全數移植 | — | M5 關閉作業 |
-| **manemu** | 封測上線 | Live API 為主（3.1-flash-live + 口譯 prompt）；backtranslate 走 3.5-flash-lite | 秒數配額完備；**無 token/全域保險絲**（m3-spec 規格有、未實作）| backtranslate 未設 thinking（p50 3.3s 疑為 thinking 稅）；synth 失敗會**升級到 pro 模型**重試 |
-| **sukemu** | active | 3.6-flash 兩段式（P1 vision + HIGH res / P2 text）；thinking 未設（預設 medium）| 每人每日張數配額；**無成本上限、無全站日預算、P2 無配額檢查** | P2 是 index-keyed batch JSON（id 對滑未驗）；P2 可試 thinking minimal |
-| **kikemu** | 評測完、產品初期 | production 逐句翻譯 3.5-flash（thinking 未設 → thoughts/output 8×）；實驗腳本一批 | **無 spend 保險絲**；有 checkpoint | 成本表用錯 lite 價（低估 3.6×，已進 PRD/儀表板）；extractVocab 截斷疑為 thinking 吃額度 |
+| **manemu** | 封測上線 | Live API 為主（3.1-flash-live + 口譯 prompt）；backtranslate 3.5-flash-lite + **minimal + 400 fallback** ✅ | 秒數配額 + **`GLOBAL_DAILY_SECONDS` 全站日預算已實作**（36000s ≈ US$14/日，壞掉時放行不鎖站）；harness 印重試放大倍率 | synth 的 pro fallback 保留但已可視（計數+警示）；**長期守則：未來任何 token 計價功能上線前必補 token 計量**（秒數保險絲對它無效）|
+| **sukemu** | active | 3.6-flash 兩段式；**ADR 0002：P1 維持預設 thinking、P2 `minimal`（-81% tokens，var 可調）** ✅ | P1/P2 同套三道門檻：張數 + `DAILY_TWD_LIMIT`（每人每日 TWD）+ `GLOBAL_DAILY_TWD`（全站）✅ | P2 id 防線已上（範圍+去重+t 回聲對位）；內建價表刻意用牌價不用促銷價；10s 目標得從縮短 P1 輸出下手（降 thinking 這條路已確認走不通）|
+| **kikemu** | 評測完、產品初期 | 逐句翻譯 3.5-flash，**translate/extractVocab 皆 `minimal` + 400 fallback、researchTerms 保留思考** ✅（`THINKING_LEVEL` var 可調）| `MAX_RETRY_PER_SEQ=3` + `SESSION_TOKEN_CAP` + QUOTA DO 逐日累計 tokens/calls + `/admin` 顯示 thoughts 拆解 + `judge.py` 有 `BUDGET_USD`/`DRY_RUN` ✅ | ~~成本表 lite 價~~ **已修**（真價+關思考後兩跳 **$0.35/hr**，「比一體式貴一倍」說法不再成立）；全域日上限尚未設值（計數已在）；AI Studio Spend 頁上限要人工去設 |
 
 ## 參考（查價/查規格入口，2026-08-13）
 

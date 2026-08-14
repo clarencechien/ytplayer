@@ -76,6 +76,10 @@ const buildWatchPrompt = (a: WatchLlmArgs): string => `你是韓國綜藝字幕�
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
+// thinking 刻意不設（＝維持模型預設）：看片是 reasoning-shaped（聽寫 + 讀字卡 + 估時間軸），
+// 與 text 路由的機械性 JSON 轉換不同 — 對照 gemini-api-lessons §1 sukemu 的成對反例
+//（P1 視覺降 minimal 會「穩定地歪」）。要改先做同片 A/B，別跟著 text 路由一起關。
+//
 // 真實呼叫：fileData(YouTube URL) + videoMetadata 時間窗。429/5xx/colo-400 小退避重試兩次，
 // 其餘錯誤丟給失敗階梯處理（階梯才懂「這段是毒段還是片尾」）。
 export function makeGeminiWatch(

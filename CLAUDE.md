@@ -6,7 +6,8 @@
 ## 硬規則（實際踩過的雷）
 
 1. **模型/設定的單一事實來源是 `worker/wrangler.jsonc`** — git 部署會蓋掉 dashboard 明文變數。
-   目前定案：`gemini-3.5-flash` + thinking 實質關閉（budget 128），依據四組同片實驗
+   目前定案：`gemini-3.5-flash` + `thinkingLevel:"minimal"`（**別用 thinkingBudget** — 它是預算不是
+   硬上限，實測 budget 128 仍漏 507 thoughts），依據四組同片實驗
    [docs/model-experiment.md](docs/model-experiment.md)，改動前先看它
 2. **thinking 以輸出價計費**，翻譯是機械任務不需要它 — 曾造成單日 NT$ 數百的帳單事故，
    完整教訓在 [docs/gemini-api-lessons.md](docs/gemini-api-lessons.md)（跨專案通用，別重學）
