@@ -21,7 +21,7 @@ describe('geminiGenerate 重試策略', () => {
     expect(calls).toBe(2);
   });
 
-  it('其他 400：先拿掉 thinkingConfig 探一次（有些模型拒收 budget），仍 400 才丟', async () => {
+  it('其他 400：先拿掉 thinkingConfig 探一次（有些模型拒收該旋鈕），仍 400 才丟', async () => {
     let calls = 0;
     const bodies: string[] = [];
     vi.stubGlobal('fetch', async (_url: string, init: { body: string }) => {
@@ -31,7 +31,8 @@ describe('geminiGenerate 重試策略', () => {
     });
     await expect(geminiGenerate('key', 'model', 'prompt')).rejects.toThrow('400');
     expect(calls).toBe(2);
-    expect(bodies[0]).toContain('thinkingConfig'); // 第一發帶 budget（預設 128）
+    expect(bodies[0]).toContain('"thinkingLevel":"minimal"'); // 第一發帶預設旋鈕
+    expect(bodies[0]).not.toContain('thinkingBudget'); // budget 與 level 永不同時送（400「only one of...」）
     expect(bodies[1]).not.toContain('thinkingConfig'); // 探測發不帶
   });
 

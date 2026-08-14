@@ -10,7 +10,7 @@
 // 每步冪等：輸出已存在（且對應同一版 source）就跳過工作直接接鏈，斷鏈由 cron 看門狗補。
 
 import { segmentCues, type Sentence } from './segment';
-import type { LlmFn } from './llm';
+import type { LlmFn, Thinking } from './llm';
 import { PROMPT_VERSION, buildGlossaryPrompt } from './prompts';
 import {
   chunkSentences,
@@ -97,7 +97,10 @@ export interface JobEnv {
   GEMINI_API_KEY?: string;
   GEMINI_MODEL?: string;
   GEMINI_MEDIA_RES?: string; // 看片解析度，預設 MEDIA_RESOLUTION_MEDIUM（LOW 省 4 倍但字卡辨識差）
-  GEMINI_THINKING_BUDGET?: string; // text 路由 thinking 上限，預設 0（翻譯不需要推理；thinking 以輸出價計費）
+  // thinking 旋鈕（gemini-api-lessons §1）：預設 minimal（唯一實測歸零的檔位）。
+  // GEMINI_THINKING_BUDGET 是 legacy 逃生口；兩者都設時以 level 為準（永不同時送出）
+  GEMINI_THINKING_LEVEL?: string;
+  GEMINI_THINKING_BUDGET?: string;
   VIDEO_TOKEN_CAP?: string; // text 路由每片 token 上限（保險絲第 3 層），預設 500k
   WATCH_TOKEN_CAP?: string; // video 路由每片上限，預設 3M（看片 ≈ 300 tok/秒，30 分鐘 ≈ 54 萬 + 重試餘裕）
   DAILY_TOKEN_CAP?: string; // 每日全域 token 上限（第 4 層），預設 2M
@@ -119,7 +122,7 @@ const chunkSize = (env: JobEnv): number => {
 
 // 本輪模型解析：status 覆寫 > env 預設。fallback 與 wrangler.jsonc 一致
 export const modelOf = (env: JobEnv, st?: JobStatus | null): string =>
-  st?.modelOverride || env.GEMINI_MODEL || 'gemini-3.6-flash';
+  st?.modelOverride || env.GEMINI_MODEL || 'gemini-3.5-flash';
 
 const num = (v: string | undefined, dflt: number): number => {
   const n = Number(v);
@@ -185,9 +188,15 @@ function makeStepLlm(
   llmOverride?: LlmFn,
   model?: string
 ): LlmFn {
-  model = model || env.GEMINI_MODEL || 'gemini-3.6-flash';
-  // 翻譯/修稿是機械性 JSON 轉換，thinking 預設關（0）— 它以輸出價計費，實測是帳單大宗
-  const thinkingBudget = env.GEMINI_THINKING_BUDGET != null ? Number(env.GEMINI_THINKING_BUDGET) : 128;
+  model = model || env.GEMINI_MODEL || 'gemini-3.5-flash';
+  // 翻譯/修稿是機械性 JSON 轉換 → thinking 關到底。level 'minimal' 是唯一實測 thoughts=0 的檔位；
+  // budget 是「預算」不是硬上限（實測 budget 128 在真實 prompt 上仍漏 507 thoughts，見 llm.ts）
+  const budgetVar = Number(env.GEMINI_THINKING_BUDGET);
+  const thinking: Thinking = env.GEMINI_THINKING_LEVEL
+    ? { level: env.GEMINI_THINKING_LEVEL }
+    : env.GEMINI_THINKING_BUDGET != null && Number.isFinite(budgetVar)
+      ? { budget: budgetVar }
+      : { level: 'minimal' };
   return async (prompt) => {
     if (++meter.calls > maxCalls) throw new Error(`單步 LLM 呼叫超過上限 ${maxCalls} 次，中止（防重試失控）`);
     if (llmOverride) return llmOverride(prompt);
@@ -201,7 +210,7 @@ function makeStepLlm(
         meter.prompt += u.prompt;
         meter.thoughts += u.thoughts;
       },
-      Number.isFinite(thinkingBudget) ? thinkingBudget : 128
+      thinking
     );
   };
 }
@@ -497,7 +506,7 @@ async function planStep(env: JobEnv, videoId: string, force: boolean, modelOverr
     const bilHead = await env.SUBS.head(`subs/${videoId}/bilingual.json`);
     if (bilHead && bilHead.uploaded >= srcHead.uploaded) {
       const doc = await jsonGet<Record<string, unknown>>(env, `subs/${videoId}/bilingual.json`);
-      const wantModel = modelOverride || env.GEMINI_MODEL || 'gemini-3.6-flash';
+      const wantModel = modelOverride || env.GEMINI_MODEL || 'gemini-3.5-flash';
       if (doc && doc.promptVersion === PROMPT_VERSION && doc.model === wantModel && doc.sourceLang === src.track.languageCode) {
         return { status: 200, body: { ok: true, cached: true, cueCount: (doc.cues as unknown[]).length } };
       }
