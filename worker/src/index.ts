@@ -173,6 +173,18 @@ export default {
           const info = await env.SUBS.get(`subs/${videoId}/info.json`);
           if (info) title = (JSON.parse(await info.text()) as { title?: string }).title;
         }
+        // 舊片的 status.json 沒有 untranslated 欄位（那時還沒這個功能）→ 從 bilingual.json
+        // 回填一次就好，否則儀表板永遠看不到既有影片的未譯句（docs/patch-untranslated.md P2）
+        if (st.untranslated === undefined && st.stage === 'done') {
+          const bil = await env.SUBS.get(`subs/${videoId}/bilingual.json`);
+          if (bil) {
+            const doc = JSON.parse(await bil.text()) as { cues?: Array<{ untranslated?: boolean }> };
+            st.untranslated = (doc.cues ?? []).filter((c) => c.untranslated).length;
+            await env.SUBS.put(`subs/${videoId}/status.json`, JSON.stringify(st), {
+              httpMetadata: { contentType: 'application/json' },
+            });
+          }
+        }
         jobs.push({
           videoId,
           title: title ?? videoId,

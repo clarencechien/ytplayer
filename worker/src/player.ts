@@ -788,7 +788,9 @@ function refresh() {
         return "<tr><td><a class='title' href='/watch/" + j.videoId + "' target='_blank' title='" + esc(j.title) + "'>" + esc(j.title) + "</a><br>" +
           "<span class='hint'>" + j.videoId + "・<a href='/subs/" + j.videoId + "/status.json' target='_blank'>status</a>" +
           (j.stage === "done" ? "・<a href='#' onclick='return retime(\\"" + j.videoId + "\\")' title='重算顯示時間軸（chaining，零 LLM 費用、冪等可重按）'>⏱修時間</a>" : "") +
-          (j.stage === "done" && j.untranslated > 0 ? "・<a href='#' onclick='return patch(\\"" + j.videoId + "\\")' title='只重譯未譯的那幾句（以句計價，不重跑整片）'>✏補譯</a>" : "") +
+          // 補譯鈕對所有翻好的 text 路由影片都給（沒東西可補時它會回「沒有需要補譯的句子」）——
+          // 舊片的 status 沒有未譯計數，只在有計數時才顯示等於永遠看不到
+          (j.stage === "done" && j.route !== "video" ? "・<a href='#' onclick='return patch(\\"" + j.videoId + "\\")' title='只重譯未譯／原文照抄的句子（以句計價，不重跑整片）'>✏補譯</a>" : "") +
           "</span></td>" +
           "<td>" + esc(j.route || "") + "</td>" +
           "<td class='" + stCls(j) + "'>" + esc(stTxt(j)) + "</td>" +
