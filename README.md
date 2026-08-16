@@ -45,12 +45,15 @@ Caption track 有四個層級，每層是不同的題目（詳見 [docs/handoff-
 
 ## 現況
 
-**合併後全功能可用**（2026-08-13，一日完成 kvsplayer 吸收合併，過程見 [docs/migration.md](docs/migration.md)）：
+**合併結案、全功能可用**（2026-08-13 一日完成 kvsplayer 吸收合併，2026-08-14 關閉 kvsplayer；
+過程見 [docs/migration.md](docs/migration.md)）：
 
 - **text 路由**：ingest →（ASR 修稿）→ glossary → 分塊翻譯 → deterministic 驗證/fail-fast → 自動譯註。
   日文 ASR 端到端實測通過（`Zold8`→`Z Fold8` 修復 0 殘留、untranslated 0）
 - **video 路由**：kvsplayer 看片配方移植（分段掃描/截斷接續/失敗階梯/片尾偵測）+ 播放卡卡修正
-  （時間軸單調不重疊、字卡獨立圖層）；舊資料 9 支已遷入 schema v2
+  （時間軸單調不重疊、字卡獨立圖層）；舊資料 9 支已遷入 schema v2，kvsplayer 的 Worker/queue 已刪除
+- **手機**：PWA（加到主畫面）+ 分享／貼連結進 key-gated inbox 佇列，桌機 ext badge 提醒補收
+  （刻意不做伺服器抓字幕 — POT + IP 封鎖，見 [docs/pwa-plan.md](docs/pwa-plan.md)）
 - **執行架構**：Queues 分步自我續鏈（每步落地 checkpoint、斷鏈由 cron 看門狗自癒 — 實戰驗證過）
 - **花費保險絲四層**：Google 端 prepay 配額 → 每步 3 次重試後永久失敗 → 每片 token 上限
   （text 500k / video 3M）→ 全域日預算 2M；成本事故的教訓見
@@ -58,7 +61,7 @@ Caption track 有四個層級，每層是不同的題目（詳見 [docs/handoff-
 - **隱私**：全站 noindex（含 robots.txt 不 Disallow 的陷阱解法）；清單 key-gate；
   `/watch` 公開可分享（已接受的殘餘風險記錄在 [docs/migration.md](docs/migration.md) §5）
 
-prompt 目前 **v4**；worker 測試 **97 個**。品質防線與所有實證教訓見
+prompt 目前 **v4**；worker 測試 **102 個**。品質防線與所有實證教訓見
 **[docs/lessons-learned.md](docs/lessons-learned.md)**；合併決策材料見
 [docs/kvsplayer-merge-todo.md](docs/kvsplayer-merge-todo.md)。
 glossary 目前 text 路由 by video 自動抽、video 路由 by language 靜態表（疊層方案見 backlog）。
@@ -83,28 +86,25 @@ video 路由的影片另有**字卡層**（🃏 疊畫面上緣、逐句稿有�
 
 > **2026-08-14 已完成並移出 backlog**：畫質 A 案（劇場模式 T 鍵 + 畫質顯示）、
 > 成本優化 L1+L2（單片 -51%）、PWA 手機送片（inbox 佇列 + ext badge 補收）、
-> M5 程式面收尾（KVS 綁定與 migrate.ts 已移除）。**M5 剩人工步驟見下方**。
-
-**待人工操作（程式面都完成了）**
-- 刪 kvsplayer 的 Worker 與 `kvs-jobs` queue；**先拔掉它的 `GEMINI_API_KEY`** 即可立即除險
-- `kvs-krsub` bucket 保留 30 天後再刪（保險）
-- 封存 ytpoc repo（README 指向 ytplayer）
+> **M5 kvsplayer 關閉（程式面 + 人工面皆完成 — Worker/queue 已刪，合併結案）**。
 
 | 項目 | 計畫 | 規模 | 現況／前提 |
 |---|---|---|---|
-| **成本優化（重試效率）** | [cost-optimization.md](docs/cost-optimization.md) | 半天–1 天 | 實測：9 分鐘片 NT$10.87，**六成是重試重吐譯文**。L1 補丁式重試預估 -47%。目前用量下「省錢但不急」；要大量補翻舊片就是前置條件 |
-| **PWA + 手機送片** | [pwa-plan.md](docs/pwa-plan.md) | 1–1.5 天 | 手機分享 → key-gated inbox 佇列 → 桌機 ext badge 提醒補收。**刻意不做伺服器抓字幕**（POT + IP 封鎖）|
-| **播放畫質（iframe 720p）** | [video-quality.md](docs/video-quality.md) | A 案 1 小時 / B 案 1 天 | 成因：ABR 跟播放器尺寸走 + 畫質 API 已失效 + Premium 綁登入（iframe 是第三方情境）。**A 案劇場模式**可望突破尺寸門檻；要 4K/Premium 只剩 **B 案：ext 在 youtube.com 原生頁疊字幕**（僅桌機、兩套渲染）|
-| **Glossary 疊層** | [glossary-layers.md](docs/glossary-layers.md) | G1 半天 | 解「同頻道跨影片譯法不一致」；channel key 目前只能用頻道名 slug（ext 未抓 channelId）|
+| **播放畫質 B 案** | [video-quality.md](docs/video-quality.md) | 1 天 | A 案（劇場模式）已上線、只解尺寸門檻。要 4K／Premium 畫質只剩 **B 案：ext 在 youtube.com 原生頁疊字幕**（僅桌機、兩套渲染要並存）|
+| **Glossary 疊層** | [glossary-layers.md](docs/glossary-layers.md) | G1 半天 | 解「同頻道跨影片譯法不一致」；channel key 目前只能用頻道名 slug（ext 未抓 channelId，見 future-ideas F4）|
 
-**Future ideas（還沒有計畫文件，要做先開一份）**
+**Future ideas** — 四項都已寫到可直接動工的程度（動機有實據、設計有草案、驗收有 gate、
+成本有估、決策欄留白）：**[docs/future-ideas.md](docs/future-ideas.md)**
 
-- **lite 級翻譯換協定**：E 組實測否決縮 chunk，病根是 index-keyed 的 id 紀律 → 唯一出路是改成
-  按位置對齊的純陣列輸出（成功則成本再砍 6 倍，見 [model-experiment.md](docs/model-experiment.md)）
-- **3.6-flash 重評**：`assertIdSanity` 已備妥（它當初就是被 id 對滑打回的），但仍須同料 A/B + 抽樣人工比對
-- **3.7-flash**：觀望——沒有 `minimal` 檔位，thinking 稅地板墊高（見 [gemini-api-lessons.md](docs/gemini-api-lessons.md) §1）
-- **ext 抓 channelId（ucid）**：glossary channel key 穩定化，順便讓頻道改名不影響鎖定表
-- **Firefox Android ext 移植**：FF 128+ 已支援 `world: "MAIN"`，是手機直接 ingest 的唯一非灰色路徑
+| | 一句話 |
+|---|---|
+| **F1 回聲對位** | 譯文輸出加 `t`（原文前 12 字）回聲欄位，對不上就丟該句進補丁重試 — 根治子句邊界漂移／id 對滑 |
+| **F2 lite 換協定** | index-keyed 換成按位置對齊的純陣列，讓 lite 不必維持 id 紀律（成功則再砍 ~6 倍成本） |
+| **F3 模型重評 SOP** | 明訂「什麼時候該重測 3.6／3.7／新模型」＋ 固定五步流程，免得憑印象亂換 |
+| **F4 ext 抓 channelId** | glossary channel key 穩定化（建議與 G1 同批做） |
+
+建議順序 **F1 > F3 > F4 > F2**（理由見文件末）。
+已剔除：~~Firefox Android ext 移植~~ — 手機路線已由 PWA + 桌機補收覆蓋，不值得養第二個瀏覽器擴充。
 
 ## Repo 結構與文件
 
@@ -115,11 +115,12 @@ video 路由的影片另有**字卡層**（🃏 疊畫面上緣、逐句稿有�
 | `phase0/` | 可行性探測工具與原始資料 |
 | [docs/handoff.md](docs/handoff.md) | 原始任務書（分階段規格） |
 | [docs/handoff-append-01.md](docs/handoff-append-01.md) | 影片分層策略增補 |
-| [docs/migration.md](docs/migration.md) | **kvsplayer 合併方案與執行紀錄（M0–M5、保險絲設計、隱私）** |
+| [docs/migration.md](docs/migration.md) | **kvsplayer 合併方案與執行紀錄（M0–M5 全數完成、保險絲設計、隱私）** |
+| [docs/future-ideas.md](docs/future-ideas.md) | **Future ideas F1–F4（回聲對位／lite 換協定／重評 SOP／ucid）— 有設計未排程** |
 | [docs/glossary-layers.md](docs/glossary-layers.md) | Glossary 疊層計畫（channel/genre/per-video，未實作） |
-| [docs/pwa-plan.md](docs/pwa-plan.md) | PWA + 手機送片計畫（桌機補收路線，未實作） |
-| [docs/cost-optimization.md](docs/cost-optimization.md) | 成本優化計畫（重試效率，未實作）+ 單片費用解剖 |
-| [docs/video-quality.md](docs/video-quality.md) | 播放畫質計畫（iframe 720p 成因、劇場模式 / ext 原生疊層，未實作） |
+| [docs/pwa-plan.md](docs/pwa-plan.md) | PWA + 手機送片計畫與執行紀錄（桌機補收路線，已實作） |
+| [docs/cost-optimization.md](docs/cost-optimization.md) | 成本優化 L1+L2（已實作，單片 -51%）+ 單片費用解剖 + 漂移發現 |
+| [docs/video-quality.md](docs/video-quality.md) | 播放畫質：iframe 720p 成因；A 案劇場模式已實作、B 案 ext 原生疊層未實作 |
 | [docs/subtitle-timing.md](docs/subtitle-timing.md) | 字幕時間軸：病因與修法（A 詞級斷句 + B 顯示鏈接，已實作） |
 | [docs/model-experiment.md](docs/model-experiment.md) | 模型對決四組實測（3.5-flash+關思考勝出）+ 官方牌價外部驗證 |
 | [docs/gemini-api-lessons.md](docs/gemini-api-lessons.md) | **Gemini API 跨專案教訓 v2.4（canonical）**：thinking 稅／模型 A-B 方法論／官方牌價／保險絲四層；kikemu・sukemu・manemu 實測數據已回填 |

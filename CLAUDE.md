@@ -30,7 +30,12 @@
 ## 待辦與懸案
 
 **完整 backlog 看 [README.md](README.md) 的「Backlog」段**（每項都有計畫文件 + 留白的決策欄）：
-M5 關閉 kvsplayer、成本優化（重試效率）、PWA 手機送片、glossary 疊層 + 幾個 future ideas。
+目前只剩 **畫質 B 案**（ext 在 YT 原生頁疊字幕）與 **glossary 疊層 G1**；
+有設計未排程的四項在 [docs/future-ideas.md](docs/future-ideas.md)（F1 回聲對位 > F3 重評 SOP >
+F4 ext ucid > F2 lite 換協定）。
+
+已完成收工（別重做）：M0–M5 全部（kvsplayer 已關閉、合併結案）、畫質 A 案（劇場模式）、
+成本優化 L1+L2（單片 -51%）、PWA 手機送片。
 
 已結案的實驗結論（別重跑）：
 - ~~lite 縮 chunk 再戰~~：**已測否決**（2026-08-14，E 組缺句反而更多 — 病根是 index-keyed
