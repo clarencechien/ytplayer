@@ -81,6 +81,12 @@ const STYLE = `
   body[data-mode="en"] #subZh { display: none; }
   body.notes-off #subNote, body.notes-off .row .note { display: none; }
   .stage:fullscreen { background: #000; }
+  /* 劇場模式：收起逐句稿，影片區吃滿視窗寬 — YouTube 依「播放器渲染尺寸」選畫質
+     （720p 需 ~1280x720、1080p 需 ~1920x1080），窄版面會被鎖在低畫質。
+     見 docs/video-quality.md */
+  body.theater aside { display: none; }
+  body.theater .stage { flex: 1; }
+  #quality { font-variant-numeric: tabular-nums; }
 
   /* transcript */
   aside {
@@ -190,6 +196,7 @@ export function watchPage(videoId: string): string {
   <a id="backBtn" href="/" title="回影片清單">←</a>
   <h1 id="title">載入中…</h1>
   <span class="meta" id="meta"></span>
+  <span class="meta" id="quality" title="YouTube 目前實際輸出的畫質（依播放器尺寸自動選）"></span>
   <div class="controls">
     <button id="btnMode" title="快捷鍵 C：開/關字幕">字幕：雙語</button>
     <button id="btnNotes" class="on">譯註：開</button>
@@ -199,6 +206,7 @@ export function watchPage(videoId: string): string {
     <button id="btnAlpha" title="字幕底色/文字整體透明度">透明度：100%</button>
     <button id="btnSpeed" title="快捷鍵 Shift+&lt; / Shift+&gt;">速度：1x</button>
     <button id="btnLock" title="開放：可直接操作 YouTube 原生介面（畫質等）；期間點影片後熱鍵可能失效，鎖回即恢復">YT 介面：鎖定</button>
+    <button id="btnTheater" title="快捷鍵 T：收起逐句稿讓畫面變大（畫質會跟著提升）">劇場模式</button>
     <button id="btnFull">⛶ 全螢幕</button>
     <button id="btnHelp" title="操作說明與快捷鍵">？</button>
   </div>
@@ -254,7 +262,7 @@ var OFF = 3, ALPHAS = [1, 0.75, 0.5, 0.25], SPEEDS = [0.75, 1, 1.25, 1.5, 1.75, 
 // mobile 偵測：touch 為主、UA 為輔
 var MOBILE = (window.matchMedia && matchMedia("(pointer: coarse)").matches) ||
   /iPhone|iPad|Android/i.test(navigator.userAgent);
-var S = { mode: 0, notes: true, follow: !MOBILE, scale: 1, alpha: 0, speed: 1 };
+var S = { mode: 0, notes: true, follow: !MOBILE, scale: 1, alpha: 0, speed: 1, theater: false };
 var prevMode = 0; // C 鍵切回「無」之前的模式
 try { Object.assign(S, JSON.parse(localStorage.getItem("ytplayer-settings") || "{}")); } catch (e) {}
 var cues = [], rows = [], cur = -1, cardCues = [], cardKey = "";
@@ -274,12 +282,32 @@ function applySettings() {
   document.documentElement.style.setProperty("--band-alpha", ALPHAS[S.alpha] || 1);
   document.getElementById("btnAlpha").textContent = "透明度：" + Math.round((ALPHAS[S.alpha] || 1) * 100) + "%";
   document.getElementById("btnSpeed").textContent = "速度：" + (SPEEDS[S.speed] || 1) + "x";
+  document.body.classList.toggle("theater", !!S.theater);
+  document.getElementById("btnTheater").classList.toggle("on", !!S.theater);
   if (yt && yt.setPlaybackRate) yt.setPlaybackRate(SPEEDS[S.speed] || 1);
+  setTimeout(showQuality, 1200); // 版面變動後 ABR 需要一點時間換檔
+}
+
+// 畫質顯示：YouTube 不讓程式「指定」畫質（setPlaybackQuality 已失效），但讀得到目前值。
+// 顯示出來才能驗證「畫面變大 → 畫質變好」有沒有真的發生（docs/video-quality.md §2）
+var QLABEL = { tiny: "144p", small: "240p", medium: "360p", large: "480p", hd720: "720p", hd1080: "1080p", hd1440: "1440p", hd2160: "4K", highres: "高解析" };
+function showQuality() {
+  var el = document.getElementById("quality");
+  if (!el || !yt || !yt.getPlaybackQuality) return;
+  var q = yt.getPlaybackQuality();
+  if (!q || q === "unknown") { el.textContent = ""; return; }
+  var box = document.getElementById("player").getBoundingClientRect();
+  var dpr = window.devicePixelRatio || 1;
+  el.textContent = "・🖥 " + (QLABEL[q] || q);
+  el.title = "YouTube 目前輸出 " + (QLABEL[q] || q) +
+    "（播放器 " + Math.round(box.width) + "×" + Math.round(box.height) +
+    " CSS px、DPR " + dpr + "）。畫質由 YouTube 依播放器尺寸自動決定 — 按 T 或全螢幕把畫面變大就可能提升。";
 }
 document.getElementById("btnMode").onclick = function () { S.mode = (S.mode + 1) % MODES.length; save(); applySettings(); };
 document.getElementById("btnAlpha").onclick = function () { S.alpha = (S.alpha + 1) % ALPHAS.length; save(); applySettings(); };
 document.getElementById("btnSpeed").onclick = function () { S.speed = (S.speed + 1) % SPEEDS.length; save(); applySettings(); };
 function stepSpeed(d) { S.speed = Math.min(SPEEDS.length - 1, Math.max(0, S.speed + d)); save(); applySettings(); }
+document.getElementById("btnTheater").onclick = function () { S.theater = !S.theater; save(); applySettings(); };
 document.getElementById("btnNotes").onclick = function () { S.notes = !S.notes; save(); applySettings(); };
 document.getElementById("btnFollow").onclick = function () { S.follow = !S.follow; save(); applySettings(); };
 document.getElementById("btnSmaller").onclick = function () { S.scale = Math.max(0.7, +(S.scale - 0.1).toFixed(2)); save(); applySettings(); };
@@ -288,6 +316,7 @@ function toggleFull() {
   var st = document.getElementById("stage");
   if (document.fullscreenElement) document.exitFullscreen(); else st.requestFullscreen();
 }
+document.addEventListener("fullscreenchange", function () { setTimeout(showQuality, 1500); });
 document.getElementById("btnFull").onclick = toggleFull;
 
 // 我們的字幕層就是 CC — 原生 CC 一律關（ingest 時開的 CC 是帳號黏性設定，embed 會繼承）。
@@ -342,6 +371,8 @@ document.addEventListener("keydown", function (e) {
   } else if (k === "arrowright") {
     e.preventDefault();
     seekBy(5);
+  } else if (k === "t") {
+    S.theater = !S.theater; save(); applySettings();
   } else if (k === "f") {
     toggleFull();
   } else if (e.key === "<") {
@@ -505,8 +536,10 @@ function tickCards(t) {
   });
 }
 
+var qTick = 0;
 function tick() {
   if (!yt || !yt.getCurrentTime) return;
+  if (++qTick % 33 === 0) showQuality(); // 150ms × 33 ≈ 每 5 秒更新一次畫質顯示
   var t = yt.getCurrentTime();
   tickCards(t);
   var idx = findCue(t);
