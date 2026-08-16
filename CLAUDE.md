@@ -29,8 +29,10 @@
 
 ## 待辦與懸案
 
-- M5：關閉 kvsplayer（刪 Worker/queue、30 天後刪 kvs-krsub、移除 KVS 綁定與 migrate.ts）
-- glossary 疊層（channel/genre/per-video）：計畫在 [docs/glossary-layers.md](docs/glossary-layers.md)，未實作
+**完整 backlog 看 [README.md](README.md) 的「Backlog」段**（每項都有計畫文件 + 留白的決策欄）：
+M5 關閉 kvsplayer、成本優化（重試效率）、PWA 手機送片、glossary 疊層 + 幾個 future ideas。
+
+已結案的實驗結論（別重跑）：
 - ~~lite 縮 chunk 再戰~~：**已測否決**（2026-08-14，E 組缺句反而更多 — 病根是 index-keyed
   協定對 lite 的 id 紀律要求，換協定才有救，見 model-experiment.md）
 - ~~id 連號檢查~~：**已實作**（`assertIdSanity` — 重複/亂序整包打回重試）；
