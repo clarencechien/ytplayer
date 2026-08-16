@@ -39,6 +39,7 @@ export const BANNED_EXCEPTIONS: Record<string, RegExp> = {
 export interface PromptMeta {
   title: string;
   channel: string;
+  channelId?: string; // UC… 穩定鍵值（舊 source 沒有 — glossary 會退回名稱 slug）
   description: string;
 }
 

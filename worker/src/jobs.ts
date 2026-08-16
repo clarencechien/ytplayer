@@ -29,7 +29,13 @@ import {
   type PipelineStats,
 } from './pipeline';
 import { retimeCues } from './retime';
-import watchGlossaryKo from './data/watch-glossary-ko.json'; // 韓綜譯名表（kvsplayer 移植，看片路線預設）
+import {
+  loadChannelLayer,
+  loadGenreLayer,
+  mergeGlossary,
+  channelKeys,
+  type LayeredEntry,
+} from './glossary'; // 疊層合併（docs/glossary-layers.md G1）
 import {
   initWatchState,
   nextSegment,
@@ -114,6 +120,7 @@ export interface WatchRequest {
   durationMin?: number; // 使用者提供片長 → 關閉 open 模式（countTokens 估算會低估）
   lang?: string; // 原文語言標籤，預設 ko
   title?: string;
+  channel?: string; // glossary channel 鎖定表鍵值（例 15ya）；看片路線沒有頻道 meta，只能人工指定
 }
 
 const chunkSize = (env: JobEnv): number => {
@@ -372,15 +379,16 @@ async function watchStep(env: JobEnv, videoId: string, watchOverride?: WatchLlmF
         meter.tokens += n;
       }
     );
-  // 譯名表（跨片沿用的 kvsplayer 資產）：R2 有自訂版就用它，否則用 repo 內建的預設表。
-  // 內建 fallback 讓看片路線不依賴任何一次性的匯入動作（M5 刪掉 migrate.ts 後仍然可用）
-  const lang = (await jsonGet<WatchRequest>(env, `subs/${videoId}/watch.json`))?.lang || 'ko';
-  const glossaryObj = await env.SUBS.get(`glossary/watch-${lang}.json`);
-  const glossary = glossaryObj
-    ? await glossaryObj.text()
-    : lang === 'ko'
-      ? JSON.stringify(watchGlossaryKo)
-      : '[]';
+  // 譯名表 = merge(① channel, ② genre)（G1）。看片路線沒有 channel meta，鎖定表由
+  // watch.json 的 channel 欄位人工指定（/admin 表單）；沒指定就只吃 genre —— 這正是
+  // 「A 節目的人名不會塞進 B 節目的 prompt」的修法。內建表讓它不依賴任何匯入動作。
+  const wreq = await jsonGet<WatchRequest>(env, `subs/${videoId}/watch.json`);
+  const lang = wreq?.lang || 'ko';
+  const merged = mergeGlossary({
+    channel: (await loadChannelLayer(env.SUBS, wreq?.channel ? [wreq.channel] : [])).entries,
+    genre: await loadGenreLayer(env.SUBS, lang),
+  });
+  const glossary = JSON.stringify(merged.map(({ term, zh }) => ({ term, zh })));
 
   try {
     meter.calls += 1;
@@ -674,12 +682,12 @@ async function glossaryStep(env: JobEnv, videoId: string, llmOverride?: LlmFn): 
   const existing = await jsonGet<{ sourceUploaded?: string }>(env, `subs/${videoId}/glossary.json`);
   if (!existing || existing.sourceUploaded !== st.sourceUploaded) {
     const llm = makeStepLlm(env, meter, 4, llmOverride, modelOf(env, st));
-    let glossary: GlossaryEntry[] = [];
+    let auto: GlossaryEntry[] = [];
     for (let attempt = 0; attempt < 2; attempt++) {
       try {
         const parsed = cleanJson(await llm(buildGlossaryPrompt(src.meta, sentences, src.track.languageCode)));
         if (!Array.isArray(parsed)) throw new Error('glossary 不是陣列');
-        glossary = parsed
+        auto = parsed
           .map((g): Partial<GlossaryEntry> => ({
             term: g?.term,
             zh: g?.zh ?? g?.suggested_zh, // 舊 schema 相容
@@ -693,7 +701,25 @@ async function glossaryStep(env: JobEnv, videoId: string, llmOverride?: LlmFn): 
         else st.warnings.push(`glossary 失敗，以空表續跑：${e instanceof Error ? e.message : e}`);
       }
     }
-    await jsonPut(env, `subs/${videoId}/glossary.json`, { videoId, model, sourceUploaded: st.sourceUploaded, glossary });
+    // 疊層合併（G1）：人工養的 ①② 壓過當片自動抽的 ③ —— 這是「好譯法能沉澱」的機制。
+    // ①② 是 R2 上的人工檔，改了不會自動觸發重翻（便宜、可預期）；要套用新表請 ?force=1
+    const channel = await loadChannelLayer(env.SUBS, channelKeys(src.meta));
+    const genre = await loadGenreLayer(env.SUBS, src.track.languageCode);
+    const glossary: LayeredEntry[] = mergeGlossary({ channel: channel.entries, genre, auto });
+    await jsonPut(env, `subs/${videoId}/glossary.json`, {
+      videoId,
+      model,
+      sourceUploaded: st.sourceUploaded,
+      // 層來源（除錯用）：譯法怪掉時一眼看出是誰貢獻的那條
+      layers: {
+        channelKey: channel.key ?? null,
+        channel: channel.entries.length,
+        genre: genre.length,
+        auto: auto.length,
+        merged: glossary.length,
+      },
+      glossary,
+    });
   }
 
   st.stage = 'glossary';

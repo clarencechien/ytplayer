@@ -3,6 +3,7 @@
 
 import type { Cue } from './validate';
 import { segmentCues, type Sentence } from './segment';
+import type { GlossaryEntry } from './glossary';
 import type { LlmFn } from './llm';
 import { CORE_EXTRA, EXTENDED } from './twlexicon';
 import {
@@ -16,11 +17,8 @@ import {
   type TranslateChunkInput,
 } from './prompts';
 
-export interface GlossaryEntry {
-  term: string;
-  zh: string; // 呈現形式：「中文（English）」／保留英文／純中文
-  note?: string; // 給非本科觀眾的白話解釋（30 字內）
-}
+// 術語表型別的單一定義在 glossary.ts（疊層合併也在那）；這裡轉出以免既有 import 路徑全改
+export type { GlossaryEntry } from './glossary';
 
 export interface BilingualCue {
   start: number;

@@ -310,6 +310,8 @@ export default {
         ...(Number(body.durationMin) > 0 ? { durationMin: Number(body.durationMin) } : {}),
         ...(typeof body.lang === 'string' && body.lang ? { lang: body.lang } : {}),
         ...(typeof body.title === 'string' && body.title ? { title: body.title } : {}),
+        // glossary channel 鎖定表鍵值（G1）：看片路線沒有頻道 meta，只能由送件者指定
+        ...(typeof body.channel === 'string' && /^[\w-]{1,48}$/.test(body.channel) ? { channel: body.channel } : {}),
       };
       await env.SUBS.put(`subs/${videoId}/watch.json`, JSON.stringify(reqDoc), {
         httpMetadata: { contentType: 'application/json' },

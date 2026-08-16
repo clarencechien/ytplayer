@@ -22,6 +22,17 @@ describe('validateIngest', () => {
     expect(validateIngest(valid())).toEqual([]);
   });
 
+  // F4：ucid 是選填的（舊版 ext 不會帶），但帶了就必須合法 —
+  // 錯的鍵值比沒有更糟：glossary channel 表會靜靜地查不到
+  it('meta.channelId：可省略、合法 ucid 通過、格式錯誤擋下', () => {
+    const p = valid() as ReturnType<typeof valid> & { meta: Record<string, unknown> };
+    expect(validateIngest(p)).toEqual([]);
+    p.meta.channelId = 'UCabcdefghijklmnopqrstuv';
+    expect(validateIngest(p)).toEqual([]);
+    p.meta.channelId = 'trolol';
+    expect(validateIngest(p)).toContain('meta.channelId 格式錯誤（應為 UC 開頭 24 字）');
+  });
+
   it('紅線 D：track 帶 tlang 一律拒收', () => {
     const p = valid();
     (p.track as Record<string, unknown>).tlang = 'zh-Hant';
