@@ -8,6 +8,7 @@ import {
   translateChunk,
   repairChunk,
   sanityCheckItem,
+  echoMismatch,
   assembleBilingual,
   attachGlossaryNotes,
   toSrt,
@@ -423,6 +424,146 @@ describe('L1 補丁式重試（cost-optimization.md — 缺句不重吐整包）
     };
     const r2 = await translateChunk(stubborn, meta2, [], mk(6));
     expect(r2.byId.get(2)?.zh).toBe('這個視頻很棒'); // 沒改乾淨 → 維持，交給組裝階段記 warning
+  });
+});
+
+describe('F1 回聲對位（t 欄位 — 讓「譯文對到哪句」可驗證）', () => {
+  const mk = (n: number) => ({
+    before: [],
+    // 每句開頭都不同 —— 回聲對位只能分辨「開頭不同」的句子（見 §限制）
+    target: Array.from({ length: n }, (_, i) => sent(i, `Number ${i}, this is a distinct sentence.`)),
+    after: [],
+  });
+  const idsOf = (prompt: string) => [...prompt.matchAll(/^(\d+): /gm)].map((m) => Number(m[1]));
+
+  it('echoMismatch：正規化空白/標點/全半形後比對；太短的句子不誤判', () => {
+    expect(echoMismatch('I think it is a good idea', 'I think it is')).toBe(false);
+    expect(echoMismatch('I think it is a good idea', 'i  think, it is!')).toBe(false); // 標點/空白/大小寫不算
+    expect(echoMismatch('ＡＢＣＤＥＦＧＨ', 'abcdefgh')).toBe(false); // 全半形
+    expect(echoMismatch('I think it is a good idea', 'But the rocket was')).toBe(true);
+    expect(echoMismatch('I think it is a good idea', '')).toBe(true);
+    expect(echoMismatch('I think it is a good idea', undefined)).toBe(true);
+    expect(echoMismatch('OK.', 'Hm.')).toBe(false); // 3 字元以下判不出來 → 保守放行
+  });
+
+  it('prompt 要求 t 欄位並說明用途', async () => {
+    let seen = '';
+    await translateChunk(
+      async (p) => {
+        seen = p;
+        return JSON.stringify(idsOf(p).map((id) => ({ id, t: `Number 0, thi`, zh: `中文${id}。` })));
+      },
+      meta,
+      [],
+      mk(2)
+    );
+    expect(seen).toContain('"t"');
+    expect(seen).toContain('原樣照抄');
+  });
+
+  it('對不上的句子被丟掉 → 只補那幾句（沿用 L1 補丁式重試）', async () => {
+    const asked: number[][] = [];
+    const llm = async (prompt: string) => {
+      const ids = idsOf(prompt);
+      asked.push(ids);
+      return JSON.stringify(
+        ids.map((id) => ({
+          id,
+          // 第一發：#3 的回聲對到別句（模型自認在翻 #7）→ 該句必須被丟掉
+          t: asked.length === 1 && id === 3 ? 'Number 7, this is' : `Number ${id}, this is`,
+          zh: `中文${id}。`,
+        }))
+      );
+    };
+    const r = await translateChunk(llm, meta, [], mk(8));
+    expect(asked[1]).toEqual([3]); // 只重譯對不上的那句
+    expect(r.byId.size).toBe(8);
+    expect(r.echoOff).toBe(false);
+  });
+
+  it('模型完全不回 t → 退回只靠 id 的舊行為（不讓整支影片翻不出來），但標記 echoOff', async () => {
+    const llm = async (prompt: string) => JSON.stringify(idsOf(prompt).map((id) => ({ id, zh: `中文${id}。` })));
+    const r = await translateChunk(llm, meta, [], mk(4));
+    expect(r.byId.size).toBe(4);
+    expect(r.echoOff).toBe(true);
+    expect(r.retries).toBe(0);
+  });
+
+  it('只回一部分 t → 沒回的那幾句一律丟（半套協定的輸出不可信）', async () => {
+    let n = 0;
+    const llm = async (prompt: string) => {
+      const ids = idsOf(prompt);
+      n++;
+      return JSON.stringify(
+        ids.map((id) => ({
+          id,
+          ...(n > 1 || id % 2 === 0 ? { t: `Number ${id}, this is` } : {}),
+          zh: `中文${id}。`,
+        }))
+      );
+    };
+    const r = await translateChunk(llm, meta, [], mk(4));
+    expect(r.byId.size).toBe(4); // 第二發補回來
+    expect(r.echoOff).toBe(false);
+  });
+
+  it('整批對滑（每句都對到下一句）→ 全部丟掉，不會靜靜地收下通順但錯位的譯文', async () => {
+    const llm = async (prompt: string) =>
+      JSON.stringify(idsOf(prompt).map((id) => ({ id, t: `Number ${id + 1}, this is`, zh: `中文${id}。` })));
+    const r = await translateChunk(llm, meta, [], mk(12));
+    expect(r.byId.size).toBe(0);
+    expect(r.problems.join('')).toContain('回聲對位不符');
+  });
+});
+
+describe('F2 位置對齊協定（lite 級模型用，預設不啟用）', () => {
+  const mk = (n: number) => ({
+    before: [],
+    target: Array.from({ length: n }, (_, i) => sent(i, `Number ${i}, this is a distinct sentence.`)),
+    after: [],
+  });
+  const arr = (llm: (p: string) => Promise<string>, n: number) => translateChunk(llm, meta, [], mk(n), 'en', 0, 'array');
+
+  it('prompt 不給 id、要求純字串陣列且長度固定', async () => {
+    let seen = '';
+    await arr(async (p) => {
+      seen = p;
+      return JSON.stringify(['甲的譯文', '乙的譯文', '丙的譯文']);
+    }, 3);
+    expect(seen).toContain('陣列長度必須剛好 3');
+    expect(seen).not.toMatch(/^0: /m); // 不再標號
+  });
+
+  it('按位置對應譯文', async () => {
+    const r = await arr(async () => JSON.stringify(['甲的譯文', '乙的譯文', '丙的譯文']), 3);
+    expect(r.byId.get(0)?.zh).toBe('甲的譯文');
+    expect(r.byId.get(2)?.zh).toBe('丙的譯文');
+    expect(r.echoOff).toBe(false); // 位置對齊本身即對位保證，不需要回聲欄位
+  });
+
+  it('長度不符 → 整包丟棄重試（比 id 檢查更硬）', async () => {
+    let n = 0;
+    const llm = async () => {
+      n++;
+      // 第一發少一句（模型把兩句合併）→ 整包作廢；第二發長度正確才收
+      return n === 1 ? JSON.stringify(['甲的譯文', '乙丙合併的譯文']) : JSON.stringify(['甲的譯文', '乙的譯文', '丙的譯文']);
+    };
+    const r = await arr(llm, 3);
+    expect(n).toBe(2);
+    expect(r.byId.size).toBe(3);
+    expect(r.byId.get(1)?.zh).toBe('乙的譯文');
+  });
+
+  it('長度永遠不符 → 缺句進 problems，不會硬塞錯位的譯文', async () => {
+    const r = await arr(async () => JSON.stringify(['只有一句']), 3);
+    expect(r.byId.size).toBe(0);
+    expect(r.problems.join('')).toContain('位置對齊');
+  });
+
+  it('品質地板照舊：簡體/原文照抄那句會被剔除', async () => {
+    const r = await arr(async () => JSON.stringify(['甲的譯文', '这是简体输出', '丙的譯文']), 3);
+    expect(r.byId.has(1)).toBe(false);
+    expect(r.byId.size).toBe(2);
   });
 });
 

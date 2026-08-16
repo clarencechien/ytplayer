@@ -61,7 +61,7 @@ Caption track 有四個層級，每層是不同的題目（詳見 [docs/handoff-
 - **隱私**：全站 noindex（含 robots.txt 不 Disallow 的陷阱解法）；清單 key-gate；
   `/watch` 公開可分享（已接受的殘餘風險記錄在 [docs/migration.md](docs/migration.md) §5）
 
-prompt 目前 **v4**；worker 測試 **102 個**。品質防線與所有實證教訓見
+prompt 目前 **v5**（翻譯輸出帶回聲對位欄位）；worker 測試 **130 個**。品質防線與所有實證教訓見
 **[docs/lessons-learned.md](docs/lessons-learned.md)**；合併決策材料見
 [docs/kvsplayer-merge-todo.md](docs/kvsplayer-merge-todo.md)。
 glossary 目前 text 路由 by video 自動抽、video 路由 by language 靜態表（疊層方案見 backlog）。
@@ -84,26 +84,27 @@ video 路由的影片另有**字卡層**（🃏 疊畫面上緣、逐句稿有�
 
 每項都有寫好的計畫文件與**留白的決策欄**；動工前先填決策欄（本專案工作風格：先計劃再動手）。
 
-> **2026-08-14 已完成並移出 backlog**：畫質 A 案（劇場模式 T 鍵 + 畫質顯示）、
-> 成本優化 L1+L2（單片 -51%）、PWA 手機送片（inbox 佇列 + ext badge 補收）、
-> **M5 kvsplayer 關閉（程式面 + 人工面皆完成 — Worker/queue 已刪，合併結案）**。
+> **2026-08-14/16 已完成並移出 backlog**：畫質 A 案（劇場模式 T 鍵 + 畫質顯示）、
+> 成本優化 L1+L2（單片 -51%）、PWA 手機送片、M5 kvsplayer 關閉（合併結案）、
+> **glossary 疊層 G1 + future ideas F1–F4 全數落地**（見下方「已上線」）。
 
 | 項目 | 計畫 | 規模 | 現況／前提 |
 |---|---|---|---|
 | **播放畫質 B 案** | [video-quality.md](docs/video-quality.md) | 1 天 | A 案（劇場模式）已上線、只解尺寸門檻。要 4K／Premium 畫質只剩 **B 案：ext 在 youtube.com 原生頁疊字幕**（僅桌機、兩套渲染要並存）|
-| **Glossary 疊層** | [glossary-layers.md](docs/glossary-layers.md) | G1 半天 | 解「同頻道跨影片譯法不一致」；channel key 目前只能用頻道名 slug（ext 未抓 channelId，見 future-ideas F4）|
+| **Glossary G2** | [glossary-layers.md](docs/glossary-layers.md) | 半天 | G1 已上線（疊層合併）；G2 = 儀表板編輯 + 「把自動抽的好譯法一鍵收進頻道表」|
+| **F2 lite A/B** | [future-ideas.md](docs/future-ideas.md) F2 | 半天（約 NT$35）| 位置對齊協定**程式已就緒但預設關閉** — 缺的只是照 SOP 跑一輪證據。過了就開，沒過就刪 |
+| **3.6-flash 重評** | [model-reeval-sop.md](docs/model-reeval-sop.md) | 約 NT$35 | F1 回聲對位上線 = 當初禁用它的前提已備妥，值得再測（判讀看 `echoRejects`）|
 
-**Future ideas** — 四項都已寫到可直接動工的程度（動機有實據、設計有草案、驗收有 gate、
-成本有估、決策欄留白）：**[docs/future-ideas.md](docs/future-ideas.md)**
+**2026-08-16 已上線（依相依順序 F4 → G1 → F1 → F3 → F2）**
 
-| | 一句話 |
-|---|---|
-| **F1 回聲對位** | 譯文輸出加 `t`（原文前 12 字）回聲欄位，對不上就丟該句進補丁重試 — 根治子句邊界漂移／id 對滑 |
-| **F2 lite 換協定** | index-keyed 換成按位置對齊的純陣列，讓 lite 不必維持 id 紀律（成功則再砍 ~6 倍成本） |
-| **F3 模型重評 SOP** | 明訂「什麼時候該重測 3.6／3.7／新模型」＋ 固定五步流程，免得憑印象亂換 |
-| **F4 ext 抓 channelId** | glossary channel key 穩定化（建議與 G1 同批做） |
+| | 內容 | 實測 |
+|---|---|---|
+| **G1 glossary 疊層** | channel > genre > 自動抽，同 term 上層贏、上限 80 條；兩條路由同源 | 譯法能跨影片沉澱；video 路由不再把 A 節目人名塞進 B 節目 |
+| **F4 ext ucid** | `videoDetails.channelId` → channel key（名稱 slug 後備）| 頻道改名不影響鎖定表 |
+| **F1 回聲對位** | 譯文帶 `t`（原文前 12 字），對不上就丟回重譯（prompt v5）| **抓到真實的整段位移**；但**不會**改善子句邊界漂移，成本 +14% |
+| **F3 重評 SOP** | [model-reeval-sop.md](docs/model-reeval-sop.md) + `ab-runner --repeat N` 變異表 | 「先量自然變異」變成工具預設行為 |
+| **F2 位置對齊協定** | `TRANSLATE_PROTOCOL=array`（**預設關閉，未驗證**）| — |
 
-建議順序 **F1 > F3 > F4 > F2**（理由見文件末）。
 已剔除：~~Firefox Android ext 移植~~ — 手機路線已由 PWA + 桌機補收覆蓋，不值得養第二個瀏覽器擴充。
 
 ## Repo 結構與文件
@@ -116,8 +117,9 @@ video 路由的影片另有**字卡層**（🃏 疊畫面上緣、逐句稿有�
 | [docs/handoff.md](docs/handoff.md) | 原始任務書（分階段規格） |
 | [docs/handoff-append-01.md](docs/handoff-append-01.md) | 影片分層策略增補 |
 | [docs/migration.md](docs/migration.md) | **kvsplayer 合併方案與執行紀錄（M0–M5 全數完成、保險絲設計、隱私）** |
-| [docs/future-ideas.md](docs/future-ideas.md) | **Future ideas F1–F4（回聲對位／lite 換協定／重評 SOP／ucid）— 有設計未排程** |
-| [docs/glossary-layers.md](docs/glossary-layers.md) | Glossary 疊層計畫（channel/genre/per-video，未實作） |
+| [docs/future-ideas.md](docs/future-ideas.md) | **F1–F4 設計 + 實測結果**（回聲對位／lite 換協定／重評 SOP／ucid，含「原假設錯在哪」）|
+| [docs/model-reeval-sop.md](docs/model-reeval-sop.md) | **模型重評 SOP**：觸發條件、固定五步、判讀規則（候選 mean 要超出基準 min–max）|
+| [docs/glossary-layers.md](docs/glossary-layers.md) | Glossary 疊層（channel/genre/per-video）：G1+G3 已實作、G2 未做 |
 | [docs/pwa-plan.md](docs/pwa-plan.md) | PWA + 手機送片計畫與執行紀錄（桌機補收路線，已實作） |
 | [docs/cost-optimization.md](docs/cost-optimization.md) | 成本優化 L1+L2（已實作，單片 -51%）+ 單片費用解剖 + 漂移發現 |
 | [docs/video-quality.md](docs/video-quality.md) | 播放畫質：iframe 720p 成因；A 案劇場模式已實作、B 案 ext 原生疊層未實作 |
