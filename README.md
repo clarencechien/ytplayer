@@ -86,6 +86,7 @@ video 路由的影片另有**字卡層**（🃏 疊畫面上緣、逐句稿有�
 | **M5 關閉 kvsplayer** | [migration.md](docs/migration.md) §M5 | 小（多為人工）| 資料已遷完；待刪 Worker/queue、`kvs-krsub` 保留 30 天後刪；程式面要移除 KVS 綁定與 `migrate.ts` |
 | **成本優化（重試效率）** | [cost-optimization.md](docs/cost-optimization.md) | 半天–1 天 | 實測：9 分鐘片 NT$10.87，**六成是重試重吐譯文**。L1 補丁式重試預估 -47%。目前用量下「省錢但不急」；要大量補翻舊片就是前置條件 |
 | **PWA + 手機送片** | [pwa-plan.md](docs/pwa-plan.md) | 1–1.5 天 | 手機分享 → key-gated inbox 佇列 → 桌機 ext badge 提醒補收。**刻意不做伺服器抓字幕**（POT + IP 封鎖）|
+| **播放畫質（iframe 720p）** | [video-quality.md](docs/video-quality.md) | A 案 1 小時 / B 案 1 天 | 成因：ABR 跟播放器尺寸走 + 畫質 API 已失效 + Premium 綁登入（iframe 是第三方情境）。**A 案劇場模式**可望突破尺寸門檻；要 4K/Premium 只剩 **B 案：ext 在 youtube.com 原生頁疊字幕**（僅桌機、兩套渲染）|
 | **Glossary 疊層** | [glossary-layers.md](docs/glossary-layers.md) | G1 半天 | 解「同頻道跨影片譯法不一致」；channel key 目前只能用頻道名 slug（ext 未抓 channelId）|
 
 **Future ideas（還沒有計畫文件，要做先開一份）**
@@ -110,6 +111,7 @@ video 路由的影片另有**字卡層**（🃏 疊畫面上緣、逐句稿有�
 | [docs/glossary-layers.md](docs/glossary-layers.md) | Glossary 疊層計畫（channel/genre/per-video，未實作） |
 | [docs/pwa-plan.md](docs/pwa-plan.md) | PWA + 手機送片計畫（桌機補收路線，未實作） |
 | [docs/cost-optimization.md](docs/cost-optimization.md) | 成本優化計畫（重試效率，未實作）+ 單片費用解剖 |
+| [docs/video-quality.md](docs/video-quality.md) | 播放畫質計畫（iframe 720p 成因、劇場模式 / ext 原生疊層，未實作） |
 | [docs/subtitle-timing.md](docs/subtitle-timing.md) | 字幕時間軸：病因與修法（A 詞級斷句 + B 顯示鏈接，已實作） |
 | [docs/model-experiment.md](docs/model-experiment.md) | 模型對決四組實測（3.5-flash+關思考勝出）+ 官方牌價外部驗證 |
 | [docs/gemini-api-lessons.md](docs/gemini-api-lessons.md) | **Gemini API 跨專案教訓 v2.4（canonical）**：thinking 稅／模型 A-B 方法論／官方牌價／保險絲四層；kikemu・sukemu・manemu 實測數據已回填 |
