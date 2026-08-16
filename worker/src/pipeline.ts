@@ -219,18 +219,16 @@ export async function repairChunk(
     }
     return byId;
   };
+  // 協定：模型只回「有修改的句子」（cost-optimization.md L2）— 所以「回傳筆數 < 句數」
+  // 是正常結果，不是缺句。只有「解析失敗」才值得重試；空陣列 = 全部都不用改。
   let byId = new Map<number, string>();
   let retries = 0;
-  let lastProblem = '';
-  for (let attempt = 0; attempt < 2 && byId.size < expected.size; attempt++) {
-    if (attempt > 0) retries++;
-    const hint = attempt > 0 ? `上一次輸出有問題（${lastProblem}）。務必輸出純 JSON，且涵蓋所有 id。` : undefined;
+  for (let attempt = 0; attempt < 2; attempt++) {
     try {
-      const parsed = parse(await llm(buildRepairPrompt(meta, chunk, hint, sourceLang)));
-      if (parsed.size > byId.size) byId = parsed;
-      if (byId.size < expected.size) lastProblem = `預期 ${expected.size} 句只得到 ${byId.size} 句`;
-    } catch (e) {
-      lastProblem = e instanceof Error ? e.message : String(e);
+      byId = parse(await llm(buildRepairPrompt(meta, chunk, attempt > 0 ? '上一次輸出無法解析。務必輸出純 JSON 陣列（只放有修改的句子，全部都不用改就給 []）。' : undefined, sourceLang)));
+      break;
+    } catch {
+      if (attempt === 0) retries++; // 解析失敗才重打；第二次仍失敗就當「無修改」放行
     }
   }
   return { byId, retries };
@@ -246,22 +244,64 @@ export async function translateChunk(
 ): Promise<ChunkOutcome> {
   const targets = new Map(chunk.target.map((s) => [s.id, s.text]));
   const expected = targets.size;
-  let byId = new Map<number, { zh: string; note?: string }>();
+  const byId = new Map<number, { zh: string; note?: string }>();
   let retries = 0;
   const problems: string[] = [];
   let lastProblem = '';
 
-  // 最多兩輪：第一輪正常打，缺句/解析失敗/品質檢查未過再打一輪
-  for (let attempt = 0; attempt < 2 && byId.size < expected; attempt++) {
-    if (attempt > 0) retries++;
-    const hint = attempt > 0 ? `上一次輸出有問題（${lastProblem}）。務必輸出純 JSON、繁體中文，且涵蓋所有 id。` : undefined;
+  const missingIds = (): number[] => chunk.target.filter((s) => !byId.has(s.id)).map((s) => s.id);
+  // 補丁只補「少數缺句」：大量缺句通常是輸出截斷，補丁救不了 → 留給整包重打/切半分治
+  const patchable = (n: number): boolean => n > 0 && n <= Math.max(3, Math.ceil(expected * 0.25));
+
+  // 只翻某幾句的小請求：語境仍給（前後各取 2 句），但只要求輸出這幾句 —
+  // 「缺 1 句就重吐整包 40 句譯文」是帳單的大宗（cost-optimization.md L1）
+  const subChunk = (ids: number[]): TranslateChunkInput => {
+    const idx = new Map(chunk.target.map((s, i) => [s.id, i]));
+    const first = idx.get(ids[0]) ?? 0;
+    const last = idx.get(ids[ids.length - 1]) ?? chunk.target.length - 1;
+    return {
+      before: [...chunk.before, ...chunk.target.slice(Math.max(0, first - 2), first)].slice(-2),
+      target: chunk.target.filter((s) => ids.includes(s.id)),
+      after: [...chunk.target.slice(last + 1, last + 3), ...chunk.after].slice(0, 2),
+    };
+  };
+
+  const runOnce = async (
+    input: TranslateChunkInput,
+    hint?: string
+  ): Promise<{ accepted: number; rejected: string[] }> => {
+    const want = new Map(input.target.map((s) => [s.id, s.text]));
+    const { byId: parsed, rejected } = parseChunkOutput(
+      await llm(buildTranslatePrompt(meta, glossary, input, hint, sourceLang)),
+      want
+    );
+    let accepted = 0;
+    for (const [id, v] of parsed) {
+      if (!byId.has(id)) accepted++;
+      byId.set(id, v);
+    }
+    return { accepted, rejected };
+  };
+
+  // 第一輪：整包
+  try {
+    const { rejected } = await runOnce(chunk);
+    if (byId.size < expected) {
+      lastProblem = rejected.length
+        ? `${rejected.length} 句未過品質檢查：${rejected.slice(0, 3).join('、')}`
+        : `預期 ${expected} 句只得到 ${byId.size} 句`;
+    }
+  } catch (e) {
+    lastProblem = e instanceof Error ? e.message : String(e);
+  }
+
+  // 第二輪：少數缺句 → 只補那幾句（省輸出）；大量缺句 → 整包重打（可能是截斷）
+  if (byId.size < expected) {
+    retries++;
+    const miss = missingIds();
+    const hint = `上一次輸出有問題（${lastProblem}）。務必輸出純 JSON、繁體中文，且涵蓋所有 id。`;
     try {
-      const { byId: parsed, rejected } = parseChunkOutput(
-        await llm(buildTranslatePrompt(meta, glossary, chunk, hint, sourceLang)),
-        targets
-      );
-      // 保留較完整的一輪
-      if (parsed.size > byId.size) byId = parsed;
+      const { rejected } = patchable(miss.length) ? await runOnce(subChunk(miss), hint) : await runOnce(chunk, hint);
       if (byId.size < expected) {
         lastProblem = rejected.length
           ? `${rejected.length} 句未過品質檢查：${rejected.slice(0, 3).join('、')}`
@@ -272,7 +312,7 @@ export async function translateChunk(
     }
   }
 
-  // 兩輪仍缺句：切半分治一次（對付輸出截斷與單點毒句 — 整包重打救不了這兩種）
+  // 仍缺句且量大：切半分治一次（對付輸出截斷與單點毒句 — 整包重打救不了這兩種）
   if (byId.size < expected && depth === 0 && chunk.target.length > 10) {
     const mid = Math.ceil(chunk.target.length / 2);
     const firstHalf: TranslateChunkInput = {
@@ -295,21 +335,38 @@ export async function translateChunk(
       for (const [id, v] of m) if (!byId.has(id)) byId.set(id, v);
     }
   }
+
+  // 崩塌偵測放在「合併之後」：補丁與分治會把結果拆成多次呼叫，
+  // 單次呼叫內的重複檢查會漏掉跨呼叫的崩塌（同一句譯文 ≥3 次只留第一句）
+  const dup = new Map<string, number[]>();
+  for (const [id, v] of byId) {
+    if (v.zh.length >= 6) dup.set(v.zh, [...(dup.get(v.zh) ?? []), id]);
+  }
+  for (const [zh, ids] of dup) {
+    if (ids.length >= 3) {
+      for (const id of ids.slice(1)) byId.delete(id);
+      problems.push(`${ids.length - 1} 句重複譯文已丟棄（${zh.slice(0, 12)}…）`);
+    }
+  }
   if (byId.size < expected) problems.push(`缺 ${expected - byId.size} 句：${lastProblem}`);
 
-  // 禁用詞：命中則整個 chunk 帶提示重打一次，取「覆蓋不變差且命中較少」的結果
-  const hits = [...byId.values()].flatMap((v) => scanBanned(v.zh));
-  if (hits.length > 0) {
+  // 禁用詞：只重譯命中的那幾句（同樣不重吐整包），乾淨版本才採用
+  const offenders = [...byId.entries()].filter(([, v]) => scanBanned(v.zh).length > 0);
+  if (offenders.length > 0) {
     retries++;
+    const hits = [...new Set(offenders.flatMap(([, v]) => scanBanned(v.zh)))];
     try {
+      const ids = offenders.map(([id]) => id);
+      const want = new Map(ids.map((id) => [id, targets.get(id)!]));
       const { byId: again } = parseChunkOutput(
         await llm(
-          buildTranslatePrompt(meta, glossary, chunk, `上一次譯文出現禁用的中國用語：${[...new Set(hits)].join('、')}。全部改為台灣慣用詞。`, sourceLang)
+          buildTranslatePrompt(meta, glossary, subChunk(ids), `上一次譯文出現禁用的中國用語：${hits.join('、')}。全部改為台灣慣用詞。`, sourceLang)
         ),
-        targets
+        want
       );
-      const againHits = [...again.values()].flatMap((v) => scanBanned(v.zh));
-      if (again.size >= byId.size && againHits.length < hits.length) byId = again;
+      for (const [id, v] of again) {
+        if (scanBanned(v.zh).length === 0) byId.set(id, v); // 改乾淨了才換掉
+      }
     } catch {
       /* 保留原結果，讓禁用詞掃描在組裝階段記 warning */
     }
@@ -320,13 +377,20 @@ export async function translateChunk(
 
 // --- 組裝 ---
 
+// 子句邊界漂移的偵測（deterministic，零成本）：ASR 句子是碎片，模型有時把子句邊界
+// 跨 cue 重新分配 —— 語意總和沒錯，但單句會對不上（長原文卻只有兩三個字的譯文）。
+// 這是既有現象（新舊版都有），列為 hints 讓它可見；不當執法條件（短譯文也可能是合理的）
+const driftSuspect = (en: string, zh: string): boolean =>
+  en.trim().split(/\s+/).length >= 6 && zh.trim().length <= 4;
+
 export function assembleBilingual(
   sentences: Sentence[],
   cues: Cue[],
   byId: Map<number, { zh: string; note?: string }>
-): { cues: BilingualCue[]; untranslated: number; bannedHits: string[]; extendedHits: string[] } {
+): { cues: BilingualCue[]; untranslated: number; bannedHits: string[]; extendedHits: string[]; driftCount: number } {
   const out: BilingualCue[] = [];
   let untranslated = 0;
+  let driftCount = 0;
   const bannedHits: string[] = [];
   const extendedHits: string[] = [];
   for (const s of sentences) {
@@ -337,6 +401,7 @@ export function assembleBilingual(
     else {
       bannedHits.push(...scanBanned(tr.zh));
       extendedHits.push(...scanExtended(tr.zh));
+      if (driftSuspect(s.text, tr.zh)) driftCount++;
     }
     out.push({
       // 詞級斷句的句子自帶精準起訖（docs/subtitle-timing.md A）；否則退回 cue 邊界
@@ -348,7 +413,7 @@ export function assembleBilingual(
       ...(tr ? {} : { untranslated: true }),
     });
   }
-  return { cues: out, untranslated, bannedHits: [...new Set(bannedHits)], extendedHits: [...new Set(extendedHits)] };
+  return { cues: out, untranslated, bannedHits: [...new Set(bannedHits)], extendedHits: [...new Set(extendedHits)], driftCount };
 }
 
 // 術語第一次出現時，把 glossary 的白話註解附到該句（deterministic — chunk 平行翻譯，

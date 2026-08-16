@@ -6,7 +6,9 @@
 //   GET  /watch/{id}                    player 頁（公開 — videoId 是 YouTube 公開資訊）
 //   GET  /subs/{id}/{file}              字幕與狀態檔（公開白名單）
 //   GET  /videos.json?key=              清單 = 觀看紀錄，要 key
-//   GET  /health /robots.txt /          公開
+//   POST /inbox                         手機送片：排入「待補字幕」佇列（key）
+//   GET  /inbox.json                    待補清單（key）— ext popup 與清單頁共用
+//   GET  /health /robots.txt /manifest.webmanifest /sw.js /share   公開
 //
 // 認證：wrangler secret `INGEST_KEY` — 人用 ?key=、程式用 x-ingest-key header。
 // 執行：LLM 工作只在 queue consumer 跑（fetch handler 跑不了長工作 — 實測會被砍，
@@ -17,7 +19,7 @@ import { migrateKvs } from './migrate';
 import { retimeCues, type RetimeCue } from './retime';
 import { listVideos, routeSource, toSrt } from './pipeline';
 import { handleJob, watchdog, readDailyBudget, type JobMsg, type MsgLike, type WatchRequest } from './jobs';
-import { watchPage, indexPage, adminPage } from './player';
+import { watchPage, indexPage, adminPage, sharePage } from './player';
 
 export interface Env {
   SUBS: R2Bucket;
@@ -97,6 +99,36 @@ export default {
     if (req.method === 'GET' && path === '/' && oldV && /^[A-Za-z0-9_-]{11}$/.test(oldV)) {
       return Response.redirect(`${url.origin}/watch/${oldV}`, 302);
     }
+    if (req.method === 'GET' && path === '/manifest.webmanifest') {
+      return new Response(
+        JSON.stringify({
+          name: 'ytplayer — 雙語字幕',
+          short_name: 'ytplayer',
+          start_url: '/',
+          scope: '/',
+          display: 'standalone',
+          background_color: '#0f1115',
+          theme_color: '#0f1115',
+          icons: [192, 512].map((size) => ({ src: `/icon-${size}.png`, sizes: `${size}x${size}`, type: 'image/png', purpose: 'any maskable' })),
+          // Android：YouTube app 分享 → 選 ytplayer → 進 /share（iOS PWA 不支援，用貼上框）
+          share_target: { action: '/share', method: 'GET', params: { title: 'title', text: 'text', url: 'url' } },
+        }),
+        { headers: { 'content-type': 'application/manifest+json; charset=utf-8', ...BASE } }
+      );
+    }
+    // 極簡 service worker：只為了取得「可安裝」資格 — 刻意不快取（快取失效的維運成本 > 自用收益）
+    if (req.method === 'GET' && path === '/sw.js') {
+      return new Response("self.addEventListener('fetch', function () {});\n", {
+        headers: { 'content-type': 'application/javascript; charset=utf-8', ...BASE },
+      });
+    }
+    // 單色 PNG 圖示（避免外部依賴；1x1 放大由瀏覽器處理）
+    const ico = path.match(/^\/icon-(192|512)\.png$/);
+    if (req.method === 'GET' && ico) {
+      const png = Uint8Array.from(atob('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg=='), (c) => c.charCodeAt(0));
+      return new Response(png, { headers: { 'content-type': 'image/png', 'cache-control': 'public, max-age=86400', ...BASE } });
+    }
+    if (req.method === 'GET' && path === '/share') return html(sharePage());
     if (req.method === 'GET' && path === '/') return html(indexPage());
     // 看片路線的人用入口（貼連結）。建議再套 Cloudflare Access 蓋 /admin/*
     if (req.method === 'GET' && path === '/admin') return html(adminPage());
@@ -180,6 +212,63 @@ export default {
     const w = path.match(/^\/watch\/([A-Za-z0-9_-]{11})$/);
     if (req.method === 'GET' && w) return html(watchPage(w[1]));
 
+    // --- PWA 手機送片：inbox 待補佇列（docs/pwa-plan.md）---
+    // 手機沒有 ext（無法攔截字幕），所以只排隊、不抓字幕；桌機 ext 開瀏覽器時補收。
+    // inbox = 觀看「意圖」，比觀看紀錄更私密 → 一律 key-gated。
+    if (req.method === 'POST' && path === '/inbox') {
+      if (!authorized) return json({ ok: false, error: 'unauthorized' }, 403);
+      let body: Record<string, unknown> = {};
+      try {
+        body = (await req.json()) as Record<string, unknown>;
+      } catch {
+        /* 也允許 ?url= */
+      }
+      const raw = String(body.url ?? url.searchParams.get('url') ?? '');
+      const m2 = raw.match(/(?:v=|youtu\.be\/|shorts\/|embed\/)?([A-Za-z0-9_-]{11})(?:[?&#]|$)/);
+      if (!m2) return json({ ok: false, error: '無法從連結解析出影片 ID' }, 400);
+      const videoId = m2[1];
+      // 已經有字幕/來源了就不用排（避免手機重複送同一支）
+      if (await env.SUBS.head(`subs/${videoId}/bilingual.json`)) {
+        return json({ ok: true, videoId, already: 'translated', watch: `${url.origin}/watch/${videoId}` });
+      }
+      if (await env.SUBS.head(`subs/${videoId}/source.json`)) {
+        return json({ ok: true, videoId, already: 'ingested', watch: `${url.origin}/watch/${videoId}` });
+      }
+      await env.SUBS.put(
+        `inbox/${videoId}.json`,
+        JSON.stringify({
+          videoId,
+          url: `https://www.youtube.com/watch?v=${videoId}`,
+          requestedAt: new Date().toISOString(),
+          via: typeof body.via === 'string' ? body.via : 'share',
+          ...(typeof body.title === 'string' && body.title ? { title: body.title } : {}),
+        }),
+        { httpMetadata: { contentType: 'application/json' } }
+      );
+      return json({ ok: true, videoId, queued: true, watch: `${url.origin}/watch/${videoId}` }, 202);
+    }
+    if (req.method === 'GET' && path === '/inbox.json') {
+      if (!authorized) return json({ ok: false, error: 'unauthorized' }, 403);
+      const items: Array<Record<string, unknown>> = [];
+      let cursor: string | undefined;
+      do {
+        const res = await env.SUBS.list({ prefix: 'inbox/', cursor });
+        for (const o of res.objects) {
+          const obj = await env.SUBS.get(o.key);
+          if (obj) items.push(JSON.parse(await obj.text()) as Record<string, unknown>);
+        }
+        cursor = res.truncated ? res.cursor : undefined;
+      } while (cursor);
+      items.sort((a, b) => String(b.requestedAt ?? '').localeCompare(String(a.requestedAt ?? '')));
+      return json({ ok: true, count: items.length, items });
+    }
+    const del = path.match(/^\/inbox\/([A-Za-z0-9_-]{11})$/);
+    if (req.method === 'DELETE' && del) {
+      if (!authorized) return json({ ok: false, error: 'unauthorized' }, 403);
+      await env.SUBS.delete(`inbox/${del[1]}.json`);
+      return json({ ok: true, removed: del[1] });
+    }
+
     if (req.method === 'POST' && path === '/ingest') {
       if (!authorized) return json({ ok: false, error: 'unauthorized' }, 403);
       const text = await req.text();
@@ -198,6 +287,8 @@ export default {
       await env.SUBS.put(key, JSON.stringify({ ...(payload as object), ingestedAt: new Date().toISOString() }), {
         httpMetadata: { contentType: 'application/json' },
       });
+      // 補收閉環：這支若在待補佇列裡，ingest 成功即銷帳（docs/pwa-plan.md §4.1）
+      await env.SUBS.delete(`inbox/${p.videoId}.json`);
       // ingest 完直接排入翻譯（cron 看門狗只是漏接保險）
       const { route, reason } = routeSource(p);
       if (route !== 'reject') await env.JOBS.send({ videoId: p.videoId, step: 'plan' });

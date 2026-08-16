@@ -222,11 +222,29 @@ describe('repairChunk', () => {
     expect(r.retries).toBe(0);
   });
 
-  it('缺句重試一次；仍缺回傳部分結果', async () => {
-    const llm = async () => '[{"id":0,"en":"fixed."}]';
+  it('只回改動句是正常結果，不觸發重試（L2 協定 — 省輸出）', async () => {
+    let calls = 0;
+    const llm = async () => { calls++; return '[{"id":0,"en":"fixed."}]'; }; // 只有 id 0 需要修
     const r = await repairChunk(llm, meta, chunk);
+    expect(calls).toBe(1);       // 不因「少於句數」而重打
+    expect(r.retries).toBe(0);
+    expect(r.byId.size).toBe(1); // 未回傳的 id 1 由上游沿用原文
+  });
+
+  it('全部都不用改（空陣列）也是正常結果', async () => {
+    let calls = 0;
+    const r = await repairChunk(async () => { calls++; return '[]'; }, meta, chunk);
+    expect(calls).toBe(1);
+    expect(r.byId.size).toBe(0);
+    expect(r.retries).toBe(0);
+  });
+
+  it('解析失敗才重打；第二次仍失敗就放行（視為無修改，不擋 pipeline）', async () => {
+    let calls = 0;
+    const r = await repairChunk(async () => { calls++; return '不是 JSON'; }, meta, chunk);
+    expect(calls).toBe(2);
     expect(r.retries).toBe(1);
-    expect(r.byId.size).toBe(1);
+    expect(r.byId.size).toBe(0);
   });
 });
 
@@ -347,5 +365,85 @@ describe('id 連號檢查（批次對滑防線 — gemini-api-lessons §6）', (
     const badRepair = async () => '[{"id":1,"en":"b"},{"id":0,"en":"a"}]';
     const rr = await repairChunk(badRepair, meta, { before: [], target: sentences(2), after: [] });
     expect(rr.byId.size).toBe(0);
+  });
+});
+
+describe('L1 補丁式重試（cost-optimization.md — 缺句不重吐整包）', () => {
+  const meta2 = { title: 't', channel: 'c', description: 'd' };
+  const mk = (n: number) => ({ before: [], target: Array.from({ length: n }, (_, i) => sent(i)), after: [] });
+
+  it('少數缺句 → 第二發只送缺的那幾句（輸入輸出都不重付整包）', async () => {
+    const asked: number[][] = [];
+    const llm = async (prompt: string) => {
+      const ids = [...prompt.matchAll(/^(\d+): /gm)].map((m) => Number(m[1]));
+      asked.push(ids);
+      // 第一發：20 句只回 18 句（缺 5、11）；第二發：把被問到的都回
+      const give = asked.length === 1 ? ids.filter((id) => id !== 5 && id !== 11) : ids;
+      return JSON.stringify(give.map((id) => ({ id, zh: `中文${id}。` })));
+    };
+    const r = await translateChunk(llm, meta2, [], mk(20));
+    expect(r.byId.size).toBe(20);
+    expect(asked[0].length).toBe(20); // 第一發整包
+    expect(asked[1]).toEqual([5, 11]); // 第二發只補缺的兩句 ← 省下的就是這個
+    expect(r.retries).toBe(1);
+  });
+
+  it('大量缺句（>25%）→ 判定可能是截斷，仍走整包重打', async () => {
+    const asked: number[][] = [];
+    const llm = async (prompt: string) => {
+      const ids = [...prompt.matchAll(/^(\d+): /gm)].map((m) => Number(m[1]));
+      asked.push(ids);
+      const give = asked.length === 1 ? ids.slice(0, 5) : ids; // 第一發只回 1/4
+      return JSON.stringify(give.map((id) => ({ id, zh: `中文${id}。` })));
+    };
+    const r = await translateChunk(llm, meta2, [], mk(20));
+    expect(asked[1].length).toBe(20); // 整包重打，不是補丁
+    expect(r.byId.size).toBe(20);
+  });
+
+  it('禁用詞只重譯命中的那句；沒改乾淨就保留原譯（不會越修越糟）', async () => {
+    const asked: number[][] = [];
+    const llm = async (prompt: string) => {
+      const ids = [...prompt.matchAll(/^(\d+): /gm)].map((m) => Number(m[1]));
+      asked.push(ids);
+      if (asked.length === 1) {
+        return JSON.stringify(ids.map((id) => ({ id, zh: id === 2 ? '這個視頻很棒' : `中文${id}。` })));
+      }
+      return JSON.stringify(ids.map((id) => ({ id, zh: '這支影片很棒' })));
+    };
+    const r = await translateChunk(llm, meta2, [], mk(6));
+    expect(asked[1]).toEqual([2]); // 只重譯命中那句
+    expect(r.byId.get(2)?.zh).toBe('這支影片很棒');
+    expect(r.byId.get(0)?.zh).toBe('中文0。'); // 其他句原封不動
+
+    // 重譯後仍有禁用詞 → 保留原譯（避免用更糟的覆蓋）
+    const stubborn = async (prompt: string) => {
+      const ids = [...prompt.matchAll(/^(\d+): /gm)].map((m) => Number(m[1]));
+      return JSON.stringify(ids.map((id) => ({ id, zh: id === 2 ? '這個視頻很棒' : `中文${id}。` })));
+    };
+    const r2 = await translateChunk(stubborn, meta2, [], mk(6));
+    expect(r2.byId.get(2)?.zh).toBe('這個視頻很棒'); // 沒改乾淨 → 維持，交給組裝階段記 warning
+  });
+});
+
+describe('子句邊界漂移偵測（僅提示，不是執法）', () => {
+  it('長原文配極短譯文會被數出來；正常長度與短原文不誤報', () => {
+    const cs: Cue[] = [
+      { start: 0, dur: 2, text: 'a' },
+      { start: 2, dur: 2, text: 'b' },
+      { start: 4, dur: 2, text: 'c' },
+    ];
+    const ss: Sentence[] = [
+      { id: 0, text: 'I think it is a very good option for a', cueIds: [0] }, // 10 字 → 譯文太短
+      { id: 1, text: 'this is a completely normal sentence here', cueIds: [1] },
+      { id: 2, text: 'OK.', cueIds: [2] }, // 短原文短譯文 = 正常
+    ];
+    const byId = new Map([
+      [0, { zh: '它的' }],
+      [1, { zh: '這是一句長度完全正常的譯文。' }],
+      [2, { zh: '好。' }],
+    ]);
+    const r = assembleBilingual(ss, cs, byId);
+    expect(r.driftCount).toBe(1);
   });
 });

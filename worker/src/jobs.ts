@@ -781,11 +781,13 @@ async function assembleStep(env: JobEnv, videoId: string): Promise<StepResult> {
   }
 
   const sentences = sentencesDoc.sentences;
-  const { cues, untranslated, bannedHits, extendedHits } = assembleBilingual(sentences, src.cues, byId);
+  const { cues, untranslated, bannedHits, extendedHits, driftCount } = assembleBilingual(sentences, src.cues, byId);
   retimeCues(cues); // B 治標內建：顯示鏈接 + 最短時長（docs/subtitle-timing.md）
   if (untranslated > 0) warnings.push(`${untranslated} 句翻譯失敗，以原文代替（標 untranslated）`);
   if (bannedHits.length > 0) warnings.push(`禁用詞殘留：${bannedHits.join('、')}`);
   const hints = extendedHits.length > 0 ? [`疑似中國用語（OpenCC 參考，僅提示）：${extendedHits.slice(0, 20).join('、')}`] : [];
+  // 子句邊界漂移：ASR 碎片翻譯的既有現象，僅提示（新舊版都有，見 cost-optimization.md §8）
+  if (driftCount > 0) hints.push(`${driftCount} 句疑似子句邊界漂移（長原文配極短譯文，單句對位可能偏移）`);
   const autoNotes = attachGlossaryNotes(cues, glossaryDoc.glossary);
 
   // schema v2（migration.md §1）：orig 取代 en、kind 標記 speech/card、trust 標記信任等級

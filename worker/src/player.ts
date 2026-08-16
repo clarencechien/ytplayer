@@ -789,3 +789,107 @@ document.getElementById("go").onclick = function () {
 </body>
 </html>`;
 }
+
+// /share — PWA share target 落點（Android）＋ iOS 的貼上框退路（docs/pwa-plan.md §4.3）。
+// 手機沒有 ext（攔截不了字幕），所以這裡只把影片排進「待補字幕」佇列，
+// 桌機開 Chrome 時由 ext popup 提醒補收；急件才走看片模式（貴 30 倍）。
+export function sharePage(): string {
+  return `<!DOCTYPE html>
+<html lang="zh-Hant-TW">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex">
+<link rel="manifest" href="/manifest.webmanifest">
+<title>ytplayer — 送片</title>
+<style>
+  :root { color-scheme: dark; }
+  body { margin: 0; background: #0f1115; color: #e8eaf0;
+         font: 15px/1.65 system-ui, "Noto Sans TC", sans-serif; }
+  main { max-width: 520px; margin: 0 auto; padding: 28px 18px 60px; }
+  h1 { font-size: 19px; margin-bottom: 6px; }
+  .hint { color: #8b93a5; font-size: 13px; }
+  input { width: 100%; box-sizing: border-box; background: #171a21; color: #e8eaf0;
+          border: 1px solid #262b36; border-radius: 10px; padding: 12px 14px; font-size: 16px; margin-top: 14px; }
+  button { width: 100%; margin-top: 12px; background: #ffd54a; color: #000; border: 0;
+           border-radius: 10px; padding: 13px; font-size: 16px; font-weight: 700; cursor: pointer; }
+  button.ghost { background: #171a21; color: #e8eaf0; border: 1px solid #262b36; font-weight: 500; }
+  #out { margin-top: 18px; font-size: 14px; line-height: 1.7; }
+  .ok { color: #7c5; } .err { color: #f66; }
+  a { color: #9ecbff; }
+</style>
+</head>
+<body>
+<main>
+  <h1>📥 送片給 ytplayer</h1>
+  <p class="hint">手機沒有擴充功能、抓不到字幕，所以這裡先排隊：
+  桌機開 Chrome 時擴充功能會提醒你補收（字幕品質與費用都最好）。</p>
+  <input id="url" placeholder="貼上 YouTube 連結" autocomplete="off" autocapitalize="off">
+  <button id="go">排入待補</button>
+  <button id="goWatch" class="ghost">改用看片模式（立刻有字幕，費用約 30 倍）</button>
+  <div id="out"></div>
+  <p class="hint" style="margin-top:22px">
+    <a href="/">← 影片清單</a>　<a href="/admin">儀表板</a>
+  </p>
+</main>
+<script>
+var out = document.getElementById("out");
+var input = document.getElementById("url");
+// share target（Android）：url 可能落在 url 或 text 參數
+var q = new URLSearchParams(location.search);
+var shared = q.get("url") || q.get("text") || "";
+if (shared) {
+  input.value = shared;
+  history.replaceState(null, "", "/share"); // 連結不留在網址列（noindex 之外的第二層保險）
+}
+function headers() {
+  var h = { "content-type": "application/json" };
+  var key = localStorage.getItem("ytplayer-key");
+  if (key) h["x-ingest-key"] = key;
+  return h;
+}
+function idOf(v) {
+  var m = (v || "").match(/(?:v=|youtu\\.be\\/|shorts\\/|embed\\/)?([A-Za-z0-9_-]{11})(?:[?&#]|$)/);
+  return m ? m[1] : null;
+}
+function post(path, body) {
+  out.textContent = "送出中…";
+  return fetch(path, { method: "POST", headers: headers(), body: JSON.stringify(body || {}) })
+    .then(function (r) { return r.json().then(function (j) { return { s: r.status, j: j }; }); })
+    .then(function (r) {
+      if (r.s === 403) {
+        out.innerHTML = '<span class="err">未授權</span>：請先在這台裝置用 <code>/?key=你的KEY</code> 開一次清單頁（key 會存進瀏覽器）。';
+        return null;
+      }
+      if (!r.j.ok) { out.innerHTML = '<span class="err">' + (r.j.error || ("HTTP " + r.s)) + "</span>"; return null; }
+      return r.j;
+    })
+    .catch(function (e) { out.innerHTML = '<span class="err">' + e + "</span>"; return null; });
+}
+document.getElementById("go").onclick = function () {
+  var id = idOf(input.value);
+  if (!id) { out.innerHTML = '<span class="err">看不懂這個連結</span>'; return; }
+  post("/inbox", { url: input.value, via: shared ? "share" : "paste" }).then(function (j) {
+    if (!j) return;
+    if (j.already === "translated") {
+      out.innerHTML = '<span class="ok">這支已經翻好了。</span><br><a href="/watch/' + id + '">▶ 直接看</a>';
+    } else if (j.already === "ingested") {
+      out.innerHTML = '<span class="ok">已經送過了，翻譯進行中。</span><br><a href="/watch/' + id + '">▶ 到播放頁看進度</a>';
+    } else {
+      out.innerHTML = '<span class="ok">✅ 已排入待補。</span><br>桌機開 Chrome 時，擴充功能圖示會顯示待補數量，點一下就能補收。<br><a href="/watch/' + id + '">▶ 播放頁</a>';
+    }
+  });
+};
+document.getElementById("goWatch").onclick = function () {
+  var id = idOf(input.value);
+  if (!id) { out.innerHTML = '<span class="err">看不懂這個連結</span>'; return; }
+  if (!confirm("看片模式會讓 Gemini 直接看整部影片，費用約為一般翻譯的 30 倍。確定嗎？")) return;
+  post("/watch-job/" + id, {}).then(function (j) {
+    if (!j) return;
+    out.innerHTML = '<span class="ok">🎬 看片任務已受理。</span><br><a href="/watch/' + id + '">▶ 播放頁（翻好前會顯示進度）</a>';
+  });
+};
+</script>
+</body>
+</html>`;
+}
