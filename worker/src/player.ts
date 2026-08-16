@@ -188,6 +188,10 @@ export function watchPage(videoId: string): string {
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="robots" content="noindex">
+<link rel="manifest" href="/manifest.webmanifest">
+<meta name="theme-color" content="#0f1115">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<link rel="apple-touch-icon" href="/icon-192.png">
 <title>ytplayer</title>
 <style>${STYLE}</style>
 </head>
@@ -568,6 +572,11 @@ export function indexPage(): string {
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="robots" content="noindex">
+<link rel="manifest" href="/manifest.webmanifest">
+<meta name="theme-color" content="#0f1115">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<link rel="apple-touch-icon" href="/icon-192.png">
 <title>ytplayer — 影片清單</title>
 <style>${STYLE}
   #videos { max-width: 720px; margin: 0 auto; width: 100%; overflow-y: auto; padding: 8px 0; }
@@ -579,8 +588,15 @@ export function indexPage(): string {
 </style>
 </head>
 <body>
-<header><h1>ytplayer — 中英雙語字幕</h1><span class="meta">自用 dogfood・Tier 2 自動翻譯</span></header>
-<main><div id="videos"><div class="msg">載入中…</div></div></main>
+<header>
+  <h1>ytplayer — 雙語字幕</h1>
+  <span class="meta">自用</span>
+  <a href="/share" class="meta" style="margin-left:auto;color:var(--en)">＋ 送片</a>
+</header>
+<main>
+  <div id="inbox"></div>
+  <div id="videos"><div class="msg">載入中…</div></div>
+</main>
 <script>
 // 清單需要 key（等於觀看紀錄）。首次用 /?key=XXX 進來即存進 localStorage 並清掉網址，
 // 之後直接開 / 就好；key 不進網址列歷史。單片 /watch/{id} 仍公開、可分享
@@ -602,6 +618,38 @@ function askKey(msg) {
     location.reload();
   };
 }
+
+function esc(v) { var d = document.createElement("span"); d.textContent = String(v == null ? "" : v); return d.innerHTML; }
+
+// PWA：註冊極簡 service worker 取得可安裝資格（不快取，見 docs/pwa-plan.md §4.2）
+if ("serviceWorker" in navigator) navigator.serviceWorker.register("/sw.js").catch(function () {});
+
+// 待補字幕佇列（手機送進來的片，等桌機 ext 補收）
+function loadInbox() {
+  if (!savedKey) return;
+  fetch("/inbox.json", { headers: { "x-ingest-key": savedKey } })
+    .then(function (r) { return r.ok ? r.json() : null; })
+    .then(function (d) {
+      var box = document.getElementById("inbox");
+      if (!d || !d.count) { box.innerHTML = ""; return; }
+      box.innerHTML = '<div class="msg" style="color:var(--accent)">📥 待補字幕 ' + d.count +
+        ' 支 — 桌機開 Chrome 時，擴充功能圖示會顯示數量，點一下即可補收</div>' +
+        d.items.map(function (it) {
+          return '<div class="vrow pending"><div class="title">' + esc(it.title || it.videoId) + '</div>' +
+            '<div class="sub">' + it.videoId + '・' + (it.requestedAt || "").slice(0, 16).replace("T", " ") +
+            '・<a href="https://www.youtube.com/watch?v=' + it.videoId + '" target="_blank" style="color:var(--en)">YouTube</a>' +
+            '・<a href="#" data-del="' + it.videoId + '" style="color:var(--dim)">移除</a></div></div>';
+        }).join("");
+      box.querySelectorAll("[data-del]").forEach(function (a) {
+        a.onclick = function (e) {
+          e.preventDefault();
+          fetch("/inbox/" + a.dataset.del, { method: "DELETE", headers: { "x-ingest-key": savedKey } }).then(loadInbox);
+        };
+      });
+    })
+    .catch(function () {});
+}
+loadInbox();
 
 fetch("/videos.json", { headers: savedKey ? { "x-ingest-key": savedKey } : {} }).then(function (r) {
   if (r.status === 403) { askKey("影片清單需要金鑰（單片播放連結不需要）。"); return null; }

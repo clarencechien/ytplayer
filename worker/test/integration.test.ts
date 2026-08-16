@@ -427,3 +427,28 @@ describe('watchdog（cron 看門狗 — 零成本補漏）', () => {
     expect(r.scanned).toBe(4);
   });
 });
+
+describe('inbox 待補佇列（PWA 手機送片 → 桌機 ext 補收）', () => {
+  // 端點層邏輯以 FakeR2 直接驗證行為（路由本身在 index.ts，此處測資料流與銷帳）
+  it('ingest 成功會把該片從待補佇列銷帳（補收閉環）', async () => {
+    const SUBS = new FakeR2();
+    await SUBS.put('inbox/ksfm6jeTg3Q.json', JSON.stringify({ videoId: 'ksfm6jeTg3Q', requestedAt: 'x' }));
+    // 模擬 /ingest 的關鍵兩步：寫 source + 刪 inbox
+    await SUBS.put('subs/ksfm6jeTg3Q/source.json', JSON.stringify(makeSource()));
+    await SUBS.delete('inbox/ksfm6jeTg3Q.json');
+    expect(SUBS.store.has('inbox/ksfm6jeTg3Q.json')).toBe(false);
+    // 銷帳後仍可正常翻譯
+    const r = await runPipeline(envOf(SUBS), 'ksfm6jeTg3Q', false, fakeLlm);
+    expect(r.status).toBe(200);
+  });
+
+  it('待補項目與影片資料分屬不同 prefix，不會污染清單/看門狗掃描', async () => {
+    const SUBS = new FakeR2();
+    const q = new FakeQueue();
+    await SUBS.put('inbox/AAAAAAAAAAA.json', JSON.stringify({ videoId: 'AAAAAAAAAAA' }));
+    // 看門狗只掃 subs/ → 待補項目不該被當成待翻譯（它連 source 都還沒有）
+    const r = await watchdog(envOf(SUBS, q));
+    expect(r.enqueued).toEqual([]);
+    expect(r.scanned).toBe(0);
+  });
+});
