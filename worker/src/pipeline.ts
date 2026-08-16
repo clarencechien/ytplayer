@@ -61,7 +61,63 @@ export function cleanJson(text: string): unknown {
       /* 換下一個候選 */
     }
   }
+  // 最後手段：物件級救援（docs/patch-untranslated.md P0-a）。
+  // 實例：模型多打一個 `}`，整包 40 句的譯文就全丟 —— 那些 token 已經付過錢了。
+  // 逐個掃出平衡的 {…} 分別 parse，壞的跳過、好的留下。
+  const salvaged = salvageObjects(text);
+  if (salvaged.length > 0) return salvaged;
   throw new Error(`LLM 輸出無法解析為 JSON（開頭：${text.slice(0, 80).replace(/\s+/g, ' ')}…）`);
+}
+
+function salvageObjects(text: string): unknown[] {
+  const out: unknown[] = [];
+  let depth = 0;
+  let start = -1;
+  let inStr = false;
+  let esc = false;
+  for (let i = 0; i < text.length; i++) {
+    const c = text[i];
+    if (esc) {
+      esc = false;
+      continue;
+    }
+    if (inStr) {
+      if (c === '\\') esc = true;
+      else if (c === '"') inStr = false;
+      continue;
+    }
+    if (c === '"') inStr = true;
+    else if (c === '{') {
+      if (depth === 0) start = i;
+      depth++;
+    } else if (c === '}') {
+      if (depth === 0) continue; // 多出來的右括號：忽略（正是這招要救的病）
+      if (--depth === 0 && start >= 0) {
+        try {
+          out.push(JSON.parse(text.slice(start, i + 1)));
+        } catch {
+          /* 這個物件壞掉就跳過，不影響其他句 */
+        }
+        start = -1;
+      }
+    }
+  }
+  return out;
+}
+
+// 沒有任何字母／漢字／假名／諺文的「句子」（`。`、`♪`、`...`）不值得送模型翻，
+// 也不該被算成未譯 —— 實測有 ASR 句子只有一個句號，卻佔掉一次重試又被標未譯
+const TRANSLATABLE = /[\p{Letter}\p{Number}]/u;
+export const translatableSentence = (text: string): boolean => TRANSLATABLE.test(text);
+
+// 補譯目標偵測（docs/patch-untranslated.md P1）：deterministic，不問 LLM
+export function needsRetranslate(orig: string, zh: string, untranslated?: boolean): boolean {
+  if (!translatableSentence(orig)) return false; // 本來就沒東西可翻
+  if (untranslated) return true;
+  const o = orig.trim();
+  const z = zh.trim();
+  if (!z) return true;
+  return o.length >= 6 && z === o; // 原文照抄（短句可能本來就一樣：OK、Yeah）
 }
 
 // 執法層（prompt 16 條 + speak-human-tw 策展追加）：命中觸發重譯
@@ -101,7 +157,8 @@ export function chunkSentences(sentences: Sentence[], size = 40, overlap = 2): T
   for (let i = 0; i < sentences.length; i += size) {
     chunks.push({
       before: sentences.slice(Math.max(0, i - overlap), i),
-      target: sentences.slice(i, i + size),
+      // 不可翻的句子（只有標點/音符）不進 target：送去翻只會浪費重試，還會被標未譯
+      target: sentences.slice(i, i + size).filter((s) => translatableSentence(s.text)),
       after: sentences.slice(i + size, i + size + overlap),
     });
   }
@@ -119,14 +176,24 @@ const SIMPLIFIED_CHARS =
   '贝负贡财责败货质购贴贵费资赛赞软轻载较辉迁违迟适逊递遗释钱铁银错键门闪闹闻阅阵阶陆陈队隐雾' +
   '须顶项顺顾顿预领题额风飞饭饮马验鱼鸟鸡麦齐';
 
+const HAN = /[㐀-鿿]/; // 漢字（譯文一定有；假名不算 — 這正是日文漏檢的破口）
+const KANA = /[぀-ゟ゠-ヿ]/;
+const CJK = /[぀-ヿ㐀-鿿가-힣]/;
+
 export function sanityCheckItem(en: string, zh: string): string | null {
   for (const ch of zh) {
     if (SIMPLIFIED_CHARS.includes(ch)) return `疑似簡體字（${ch}）`;
   }
-  const enWords = en.trim().split(/\s+/).length;
-  if (enWords >= 4) {
-    if (!/[぀-ヿ㐀-鿿]/.test(zh)) return '沒有中文（疑似原文照抄）';
-    if (zh.trim() === en.trim()) return '原文照抄';
+  const src = en.trim();
+  // 詞數門檻對無空格語言失效（日文一整句 split 出來只有 1 個「詞」，
+  // 於是「原文照抄」「沒有中文」兩道檢查對日/韓形同虛設 — patch-untranslated.md P0-d）
+  const units = CJK.test(src) ? Math.ceil(src.length / 2) : src.split(/\s+/).length;
+  if (units >= 4) {
+    if (!HAN.test(zh)) return '沒有漢字（疑似未翻譯）';
+    if (zh.trim() === src) return '原文照抄';
+    // 術語保留原文（「漆喰（ひきずり仕上げ）」）是合理的，整句沒翻不是 —— 用比例區分
+    const kana = [...zh].filter((c) => KANA.test(c)).length;
+    if (kana / zh.length > 0.5) return `假名比例 ${Math.round((kana / zh.length) * 100)}%（疑似未翻譯）`;
   }
   if (zh.length > en.length * 4 + 30) return '譯文長度異常';
   return null;
@@ -167,9 +234,11 @@ export function echoMismatch(orig: string, t: unknown): boolean {
   if (typeof t !== 'string') return true;
   const a = normEcho(orig);
   const b = normEcho(t);
-  if (!b) return true;
+  // 正規化後不足 3 字 = 無法判斷（原句只有標點、或模型只回了「。」）→ 放行。
+  // 這裡原本把空字串直接判成不符，與下面 n < 3 放行的規則自相矛盾，
+  // 實測害一句只有「。」的 ASR 句被連續打回兩次、最後標成未譯（patch-untranslated.md P0-c）
   const n = Math.min(a.length, b.length, ECHO_LEN);
-  if (n < 3) return false; // 太短（單字、擬聲詞）判不出來 — 保守放行，不製造假陽性
+  if (n < 3) return false;
   return a.slice(0, n) !== b.slice(0, n);
 }
 
@@ -304,6 +373,8 @@ export async function translateChunk(
   let retries = 0;
   const problems: string[] = [];
   let lastProblem = '';
+  // 整包都是不可翻的句子（過濾後空了）→ 別打 API
+  if (expected === 0) return { byId, retries, problems, echoOff: false, echoRejects: 0 };
 
   const missingIds = (): number[] => chunk.target.filter((s) => !byId.has(s.id)).map((s) => s.id);
   // 補丁只補「少數缺句」：大量缺句通常是輸出截斷，補丁救不了 → 留給整包重打/切半分治
@@ -470,8 +541,10 @@ export function assembleBilingual(
     const first = cues[s.cueIds[0]];
     const last = cues[s.cueIds[s.cueIds.length - 1]];
     const tr = byId.get(s.id);
-    if (!tr) untranslated++;
-    else {
+    // 不可翻的句子（只有標點）沒有譯文是正常的，不算未譯、也不標記
+    const skip = !tr && !translatableSentence(s.text);
+    if (!tr && !skip) untranslated++;
+    if (tr) {
       bannedHits.push(...scanBanned(tr.zh));
       extendedHits.push(...scanExtended(tr.zh));
       if (driftSuspect(s.text, tr.zh)) driftCount++;
@@ -483,7 +556,7 @@ export function assembleBilingual(
       en: s.text,
       zh: tr?.zh ?? s.text,
       ...(tr?.note ? { note: tr.note } : {}),
-      ...(tr ? {} : { untranslated: true }),
+      ...(tr || skip ? {} : { untranslated: true }),
     });
   }
   return { cues: out, untranslated, bannedHits: [...new Set(bannedHits)], extendedHits: [...new Set(extendedHits)], driftCount };

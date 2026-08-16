@@ -35,7 +35,9 @@ Caption track 有四個層級，每層是不同的題目（詳見 [docs/handoff-
    popup 給的 `/watch` 連結幾分鐘後自己出現字幕
 3. 重翻：再 ingest 一次（source 變新即自動重翻）；改 prompt 後重跑：`POST /translate/{id}?force=1`
    （`force` 也是唯一能重啟「已標記失敗」影片的方式 — 連續失敗 3 次會永久停，防燒錢）
-4. 舊片字幕「太快消失」：`/admin` 儀表板該列按「⏱ 修時間」（零 LLM 費用、冪等可重按）。
+4. 有句子沒翻到：正常情況系統翻完會**自己補**（最多 2 輪）；補不動的會在 `/admin` 顯示
+   「⚠ N 句未譯」，按該列的「✏ 補譯」再補一次（只重譯那幾句，不重跑整片）
+5. 舊片字幕「太快消失」：`/admin` 儀表板該列按「⏱ 修時間」（零 LLM 費用、冪等可重按）。
    ASR 句界要貼齊語音則需 **ext 更新後重新 ingest**（詞級時間，見
    [docs/subtitle-timing.md](docs/subtitle-timing.md)）
 
@@ -65,8 +67,11 @@ Caption track 有四個層級，每層是不同的題目（詳見 [docs/handoff-
   （鎖定譯法 0/7 → 6/7 句，見 [docs/exp-2026-08-16.md](docs/exp-2026-08-16.md) E2）
 - **對位防線**：翻譯輸出帶回聲欄位 `t`（原文前 12 字），對不上就丟回重譯 ——
   實測抓到模型「整段位移一格」的真實案例
+- **未譯句自動補譯**：翻完自己檢查（未譯旗標／原文照抄，deterministic），只重譯那幾句、
+  最多 2 輪；儀表板顯示「⚠ N 句未譯」+ **✏補譯** 鈕
+  （[docs/patch-untranslated.md](docs/patch-untranslated.md)）
 
-prompt 目前 **v5**；worker 測試 **131 個**。品質防線與所有實證教訓見
+prompt 目前 **v5**；worker 測試 **142 個**。品質防線與所有實證教訓見
 **[docs/lessons-learned.md](docs/lessons-learned.md)**；合併決策材料見
 [docs/kvsplayer-merge-todo.md](docs/kvsplayer-merge-todo.md)。
 
@@ -143,6 +148,7 @@ video 路由的影片另有**字卡層**（🃏 疊畫面上緣、逐句稿有�
 | [docs/future-ideas.md](docs/future-ideas.md) | **F1–F4 設計 + 實測結果**（回聲對位／lite 換協定／重評 SOP／ucid，含「原假設錯在哪」）|
 | [docs/model-reeval-sop.md](docs/model-reeval-sop.md) | **模型重評 SOP**：觸發條件、固定五步、判讀規則（候選 mean 要超出基準 min–max）|
 | [docs/exp-2026-08-16.md](docs/exp-2026-08-16.md) | **上線後補測**：G1 頻道表約束力、3.6-flash 重評、lite × 協定總表（含還沒測的誠實清單）|
+| [docs/patch-untranslated.md](docs/patch-untranslated.md) | **未譯句自動偵測 + 補譯**：三種病因解剖、P0 預防、P1 補譯步驟、實測 |
 | [docs/glossary-layers.md](docs/glossary-layers.md) | Glossary 疊層（channel/genre/per-video）：G1+G3 已實作、G2 未做 |
 | [docs/pwa-plan.md](docs/pwa-plan.md) | PWA + 手機送片計畫與執行紀錄（桌機補收路線，已實作） |
 | [docs/cost-optimization.md](docs/cost-optimization.md) | 成本優化 L1+L2（已實作，單片 -51%）+ 單片費用解剖 + 漂移發現 |

@@ -11,7 +11,7 @@
 
 import { segmentCues, type Sentence } from './segment';
 import type { LlmFn, Thinking } from './llm';
-import { PROMPT_VERSION, buildGlossaryPrompt } from './prompts';
+import { PROMPT_VERSION, buildGlossaryPrompt, type PromptMeta } from './prompts';
 import {
   chunkSentences,
   repairChunk,
@@ -23,6 +23,7 @@ import {
   toSrt,
   routeSource,
   scanBanned,
+  needsRetranslate,
   type SourceDoc,
   type GlossaryEntry,
   type BilingualCue,
@@ -53,7 +54,7 @@ import {
   type WatchLlmFn,
 } from './watch';
 
-export type JobStep = 'plan' | 'repair' | 'glossary' | 'translate' | 'watch' | 'assemble';
+export type JobStep = 'plan' | 'repair' | 'glossary' | 'translate' | 'watch' | 'assemble' | 'patch';
 export interface JobMsg {
   videoId: string;
   step: JobStep;
@@ -83,6 +84,9 @@ export interface JobStatus {
   llmCalls: number;
   retries: number;
   asrRepaired: number;
+  // 未譯句數（assemble/patch 後更新）：儀表板要看得到，不能只躺在 bilingual.json 裡
+  untranslated?: number;
+  patchRounds?: number; // 補譯輪數（上限 2 — 補不動的就是補不動，別無限燒）
   warnings: string[];
   // token 流向拆解（帳單事故的診斷欄）：thinking 以輸出價計費，是成本大宗嫌疑犯
   promptTokens?: number;
@@ -883,6 +887,7 @@ async function assembleStep(env: JobEnv, videoId: string): Promise<StepResult> {
   st.stage = 'done';
   st.step = undefined;
   st.asrRepaired = sentencesDoc.asrRepaired;
+  st.untranslated = untranslated;
   st.warnings = warnings;
   await writeStatus(env, st);
 
@@ -899,7 +904,99 @@ async function assembleStep(env: JobEnv, videoId: string): Promise<StepResult> {
     hints,
     elapsedMs: Date.now() - new Date(st.startedAt).getTime(),
   };
-  return { status: 200, body: { ok: true, stats } };
+  return {
+    status: 200,
+    body: { ok: true, stats },
+    // 有未譯句就自己補（docs/patch-untranslated.md P1）——
+    // 使用者不該在看片時才發現，系統翻完當下就知道了
+    next: untranslated > 0 && (st.patchRounds ?? 0) < MAX_PATCH_ROUNDS ? { videoId, step: 'patch' } : undefined,
+  };
+}
+
+// --- 補譯（docs/patch-untranslated.md P1）---
+// 翻完自己檢查、自己補：未譯句以「句」計價重譯，不重跑整片。
+// 上限 2 輪，走 queue consumer 所以四層保險絲全部適用。
+const MAX_PATCH_ROUNDS = 2;
+
+interface BilingualDoc {
+  sourceLang: string;
+  meta: PromptMeta;
+  warnings: string[];
+  hints: string[];
+  cues: Array<{ orig: string; zh: string; untranslated?: boolean; note?: string; [k: string]: unknown }>;
+  [k: string]: unknown;
+}
+
+async function patchStep(env: JobEnv, videoId: string, llmOverride?: LlmFn): Promise<StepResult> {
+  const st = await jsonGet<JobStatus>(env, statusKey(videoId));
+  const doc = await jsonGet<BilingualDoc>(env, `subs/${videoId}/bilingual.json`);
+  if (!st || !doc) return { status: 404, body: { ok: false, error: 'status 或 bilingual.json 不存在' } };
+  if (st.route === 'video') return { status: 422, body: { ok: false, error: '看片路線不支援補譯（重跑整段太貴，請 ?force=1）' } };
+
+  const sentencesDoc = await jsonGet<{ sentences: Sentence[] }>(env, `subs/${videoId}/sentences.json`);
+  const glossaryDoc = await jsonGet<{ glossary: GlossaryEntry[] }>(env, `subs/${videoId}/glossary.json`);
+  if (!sentencesDoc || sentencesDoc.sentences.length !== doc.cues.length) {
+    return { status: 409, body: { ok: false, error: 'sentences.json 與 bilingual 對不起來，請改用 ?force=1 重翻' } };
+  }
+
+  // 目標偵測全 deterministic（開發原則 #1）：未譯旗標 or 原文照抄
+  const targets = doc.cues
+    .map((c, i) => ({ i, s: sentencesDoc.sentences[i], c }))
+    .filter(({ s, c }) => needsRetranslate(s.text, c.zh, c.untranslated));
+  if (targets.length === 0) {
+    st.untranslated = 0;
+    await writeStatus(env, st);
+    return { status: 200, body: { ok: true, patched: 0, note: '沒有需要補譯的句子' } };
+  }
+
+  const meter: StepMeter = newMeter();
+  const llm = makeStepLlm(env, meter, 6, llmOverride, modelOf(env, st));
+  const all = sentencesDoc.sentences;
+  const ctx = (i: number, d: number): Sentence[] => all.slice(Math.max(0, i - d), i);
+  // 一次最多補 40 句（更多代表整片有問題，該重翻而不是補）
+  const picked = targets.slice(0, 40);
+  const first = picked[0].i;
+  const last = picked[picked.length - 1].i;
+  const outcome = await translateChunk(
+    llm,
+    doc.meta,
+    glossaryDoc?.glossary ?? [],
+    { before: ctx(first, 2), target: picked.map((t) => t.s), after: all.slice(last + 1, last + 3) },
+    doc.sourceLang
+  );
+
+  let patched = 0;
+  for (const { i, s } of picked) {
+    const v = outcome.byId.get(s.id);
+    if (!v) continue;
+    doc.cues[i] = { ...doc.cues[i], zh: v.zh, ...(v.note ? { note: v.note } : {}) };
+    delete doc.cues[i].untranslated;
+    patched++;
+  }
+
+  const left = doc.cues.filter((c, i) => needsRetranslate(sentencesDoc.sentences[i].text, c.zh, c.untranslated)).length;
+  // warnings 重寫：舊的「N 句翻譯失敗」已經不準了，留著只會誤導
+  doc.warnings = [
+    ...doc.warnings.filter((w) => !/句翻譯失敗/.test(w)),
+    ...(left > 0 ? [`${left} 句翻譯失敗，以原文代替（標 untranslated，已補譯 ${st.patchRounds ?? 0 + 1} 輪）`] : []),
+  ];
+  doc.hints = [...doc.hints.filter((h) => !/補譯/.test(h)), `補譯：${patched} 句已補回${left > 0 ? `，仍有 ${left} 句補不動` : ''}`];
+  await jsonPut(env, `subs/${videoId}/bilingual.json`, doc);
+  await env.SUBS.put(
+    `subs/${videoId}/bilingual.srt`,
+    toSrt(doc.cues.map((c) => ({ start: Number(c.start), end: Number(c.end), en: c.orig, zh: c.zh }))),
+    { httpMetadata: { contentType: 'text/plain; charset=utf-8' } }
+  );
+
+  st.patchRounds = (st.patchRounds ?? 0) + 1;
+  st.untranslated = left;
+  await settle(env, st, meter, outcome.retries);
+  return {
+    status: 200,
+    body: { ok: true, patched, left, round: st.patchRounds },
+    // 還有剩且沒到上限就再來一輪（每輪都是以句計價，不是重跑整片）
+    next: left > 0 && st.patchRounds < MAX_PATCH_ROUNDS ? { videoId, step: 'patch' } : undefined,
+  };
 }
 
 // --- 步驟分派 ---
@@ -925,6 +1022,8 @@ export async function runStep(
       return watchStep(env, msg.videoId, watchOverride);
     case 'assemble':
       return assembleStep(env, msg.videoId);
+    case 'patch':
+      return patchStep(env, msg.videoId, llmOverride);
   }
 }
 
@@ -937,7 +1036,7 @@ export interface MsgLike {
   retry(opts?: { delaySeconds?: number }): void;
 }
 
-const LLM_STEPS: ReadonlySet<JobStep> = new Set(['repair', 'glossary', 'translate', 'watch']);
+const LLM_STEPS: ReadonlySet<JobStep> = new Set(['repair', 'glossary', 'translate', 'watch', 'patch']);
 
 export async function handleJob(msg: MsgLike, env: JobEnv, llmOverride?: LlmFn, watchOverride?: WatchLlmFn): Promise<void> {
   const { videoId, step } = msg.body;

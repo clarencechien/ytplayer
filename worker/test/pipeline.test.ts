@@ -9,6 +9,8 @@ import {
   repairChunk,
   sanityCheckItem,
   echoMismatch,
+  translatableSentence,
+  needsRetranslate,
   assembleBilingual,
   attachGlossaryNotes,
   toSrt,
@@ -34,6 +36,69 @@ describe('cleanJson', () => {
       { id: 0, zh: '甲' },
       { id: 1, zh: '乙' },
     ]);
+  });
+});
+
+describe('cleanJson 物件級救援（docs/patch-untranslated.md P0-a）', () => {
+  it('模型多打一個右括號 → 逐個撿回可用的物件，不整包丟掉', () => {
+    // 實例（JM-oaFXgaSg）：譯文已經產出並付過錢，卻因為一個 `}` 全丟
+    const raw = '[ {"id":19,"t":"かと一緒に","zh":"和誰一起來這件事"} } {"id":20,"zh":"下一句"} ]';
+    expect(cleanJson(raw)).toEqual([
+      { id: 19, t: 'かと一緒に', zh: '和誰一起來這件事' },
+      { id: 20, zh: '下一句' },
+    ]);
+  });
+
+  it('壞掉的那個物件跳過，其他照收', () => {
+    const raw = '[{"id":0,"zh":"甲"},{"id":1,"zh":壞掉},{"id":2,"zh":"丙"}]';
+    expect(cleanJson(raw)).toEqual([{ id: 0, zh: '甲' }, { id: 2, zh: '丙' }]);
+  });
+
+  it('真的什麼都撿不到才丟錯', () => {
+    expect(() => cleanJson('完全不是 JSON')).toThrow();
+  });
+});
+
+describe('不可翻句與補譯目標（P0-b / P1）', () => {
+  it('只有標點/音符的句子不可翻', () => {
+    expect(translatableSentence('。')).toBe(false);
+    expect(translatableSentence('♪ ♪')).toBe(false);
+    expect(translatableSentence('...')).toBe(false);
+    expect(translatableSentence('え、そうですね')).toBe(true);
+    expect(translatableSentence('OK')).toBe(true);
+  });
+
+  it('needsRetranslate：未譯旗標、空譯文、長句原文照抄才算，不可翻句永遠不算', () => {
+    expect(needsRetranslate('かと一緒に来るっていうことが', 'かと一緒に来るっていうことが', true)).toBe(true);
+    expect(needsRetranslate('かと一緒に来るっていうことが', 'かと一緒に来るっていうことが')).toBe(true); // 沒旗標也抓得到
+    expect(needsRetranslate('some long sentence here', '')).toBe(true);
+    expect(needsRetranslate('OK.', 'OK.')).toBe(false); // 短句本來就可能一樣
+    expect(needsRetranslate('。', '。', true)).toBe(false); // 沒東西可翻
+    expect(needsRetranslate('hello world', '哈囉世界')).toBe(false);
+  });
+
+  it('chunkSentences 把不可翻句排除在 target 之外（不送模型、不佔重試）', () => {
+    const ss = [sent(0, 'hello there friend'), sent(1, '。'), sent(2, 'second line here')];
+    expect(chunkSentences(ss).flatMap((c) => c.target.map((s) => s.id))).toEqual([0, 2]);
+  });
+});
+
+describe('sanityCheckItem 對無空格語言（P0-d）', () => {
+  const ja = 'え、イメージはあります。その一方もう1';
+  it('日文整句沒翻會被抓到（原本詞數門檻讓這道檢查對日/韓形同虛設）', () => {
+    expect(sanityCheckItem(ja, ja)).toBeTruthy();
+    expect(sanityCheckItem(ja, 'えっと、イメージはありますね')).toContain('沒有漢字'); // 純假名
+    expect(sanityCheckItem(ja, 'えっと、イメージはあります方')).toContain('假名比例'); // 混一個漢字也擋得住
+  });
+
+  it('術語保留原文的正常譯文不誤殺', () => {
+    expect(sanityCheckItem('の白いところ、え、自然素材の漆喰のひきずり', '是使用天然材質的灰泥（漆喰），並以拉毛工法（ひきずり仕上げ）')).toBeNull();
+    expect(sanityCheckItem('オレンジのところは、こちら「いろは」の「あらがき」', '則是使用名為「いろは」的「あらがき」')).toBeNull();
+  });
+
+  it('英文短句與專有名詞照樣不誤殺（沒有空格的單字不能當成 CJK 長句）', () => {
+    expect(sanityCheckItem('Katelyn?', 'Katelyn？')).toBeNull();
+    expect(sanityCheckItem('OK.', 'OK。')).toBeNull();
   });
 });
 
@@ -441,8 +506,11 @@ describe('F1 回聲對位（t 欄位 — 讓「譯文對到哪句」可驗證）
     expect(echoMismatch('I think it is a good idea', 'i  think, it is!')).toBe(false); // 標點/空白/大小寫不算
     expect(echoMismatch('ＡＢＣＤＥＦＧＨ', 'abcdefgh')).toBe(false); // 全半形
     expect(echoMismatch('I think it is a good idea', 'But the rocket was')).toBe(true);
-    expect(echoMismatch('I think it is a good idea', '')).toBe(true);
-    expect(echoMismatch('I think it is a good idea', undefined)).toBe(true);
+    expect(echoMismatch('I think it is a good idea', undefined)).toBe(true); // 沒有 t 欄位 = 沒回聲
+    // 正規化後不足 3 字 = 無法判斷 → 放行（patch-untranslated.md P0-c）：
+    // 實測有一句 ASR 只有「。」，回聲永遠對不上，被連打兩次後標成未譯
+    expect(echoMismatch('I think it is a good idea', '')).toBe(false);
+    expect(echoMismatch('。', '。')).toBe(false);
     expect(echoMismatch('OK.', 'Hm.')).toBe(false); // 3 字元以下判不出來 → 保守放行
   });
 

@@ -760,6 +760,8 @@ function esc(s) { var d = document.createElement("span"); d.textContent = String
 function stCls(j) { return j.failed ? "st-fail" : j.stage === "done" ? "st-done" : j.stage === "paused" ? "st-pause" : "st-run"; }
 function stTxt(j) {
   if (j.failed) return "❌ failed：" + (j.failReason || "");
+  // 未譯句數獨立顯示：這是使用者真的會看到的品質缺口（docs/patch-untranslated.md P2）
+  if (j.stage === "done" && j.untranslated > 0) return "✅ done ⚠ " + j.untranslated + " 句未譯";
   if (j.stage === "done") return "✅ done" + (j.warningCount ? "（⚠" + j.warningCount + "）" : "");
   if (j.stage === "paused") return "⏸ " + (j.failReason || "日預算已滿");
   return "▶ " + j.stage + (j.step ? " " + j.step : "");
@@ -786,6 +788,7 @@ function refresh() {
         return "<tr><td><a class='title' href='/watch/" + j.videoId + "' target='_blank' title='" + esc(j.title) + "'>" + esc(j.title) + "</a><br>" +
           "<span class='hint'>" + j.videoId + "・<a href='/subs/" + j.videoId + "/status.json' target='_blank'>status</a>" +
           (j.stage === "done" ? "・<a href='#' onclick='return retime(\\"" + j.videoId + "\\")' title='重算顯示時間軸（chaining，零 LLM 費用、冪等可重按）'>⏱修時間</a>" : "") +
+          (j.stage === "done" && j.untranslated > 0 ? "・<a href='#' onclick='return patch(\\"" + j.videoId + "\\")' title='只重譯未譯的那幾句（以句計價，不重跑整片）'>✏補譯</a>" : "") +
           "</span></td>" +
           "<td>" + esc(j.route || "") + "</td>" +
           "<td class='" + stCls(j) + "'>" + esc(stTxt(j)) + "</td>" +
@@ -810,6 +813,20 @@ function retime(id) {
       document.getElementById("jerr").textContent = d.ok
         ? "⏱ " + id + "：已調整 " + d.changed + "/" + d.cueCount + " 句的顯示時間"
         : "修時間失敗：" + (d.error || "");
+    })
+    .catch(function (e) { document.getElementById("jerr").textContent = String(e); });
+  return false;
+}
+
+// 補譯鈕：只重譯未譯／原文照抄的句子（docs/patch-untranslated.md）
+function patch(id) {
+  fetch("/patch/" + id, { method: "POST", headers: headers() })
+    .then(function (r) { return r.json(); })
+    .then(function (d) {
+      document.getElementById("jerr").textContent = d.ok
+        ? "✏ " + id + "：補譯已排入，十幾秒後看狀態變化"
+        : "補譯失敗：" + (d.error || "");
+      setTimeout(refresh, 8000);
     })
     .catch(function (e) { document.getElementById("jerr").textContent = String(e); });
   return false;

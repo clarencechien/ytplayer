@@ -188,6 +188,9 @@ export default {
           startedAt: st.startedAt,
           updatedAt: st.updatedAt,
           warningCount: Array.isArray(st.warnings) ? st.warnings.length : 0,
+          // 未譯句數：使用者不該在看片時才發現（docs/patch-untranslated.md P2）
+          untranslated: (st.untranslated as number) ?? 0,
+          patchRounds: (st.patchRounds as number) ?? 0,
         });
       }
       // 進行中在最上、失敗次之、完成的按時間新到舊
@@ -346,6 +349,29 @@ export default {
         { httpMetadata: { contentType: 'text/plain; charset=utf-8' } }
       );
       return json({ ok: true, videoId, changed, cueCount: doc.cues.length });
+    }
+
+    // 補譯（docs/patch-untranslated.md）：只重譯未譯／原文照抄的那幾句，不重跑整片。
+    // 正常情況 assemble 完會自己排，這個端點是手動補刀（含舊片）。
+    const pt = path.match(/^\/patch\/([A-Za-z0-9_-]{11})$/);
+    if (req.method === 'POST' && pt) {
+      if (!authorized) return json({ ok: false, error: 'unauthorized' }, 403);
+      if (!env.JOBS) return json({ ok: false, error: 'JOBS queue 未綁定' }, 500);
+      const videoId = pt[1];
+      if (!(await env.SUBS.head(`subs/${videoId}/bilingual.json`))) {
+        return json({ ok: false, error: 'bilingual.json 不存在（還沒翻好）' }, 404);
+      }
+      // 手動觸發時把輪數歸零：這是人為動作，允許再給兩輪機會
+      const stObj = await env.SUBS.get(`subs/${videoId}/status.json`);
+      if (stObj) {
+        const st = JSON.parse(await stObj.text()) as Record<string, unknown>;
+        st.patchRounds = 0;
+        await env.SUBS.put(`subs/${videoId}/status.json`, JSON.stringify(st), {
+          httpMetadata: { contentType: 'application/json' },
+        });
+      }
+      await env.JOBS.send({ videoId, step: 'patch' });
+      return json({ ok: true, accepted: videoId, note: '補譯已排入，進度看 /subs/{videoId}/status.json' }, 202);
     }
 
     // 手動排入翻譯：非同步（202 即回），進度看 /subs/{id}/status.json
