@@ -560,6 +560,21 @@ describe('F2 位置對齊協定（lite 級模型用，預設不啟用）', () =>
     expect(r.problems.join('')).toContain('位置對齊');
   });
 
+  // e4a 第 3 輪的實測缺陷：只切半一次的話，一個壞掉的半包 = 連續 7 句沒翻
+  it('半包也失敗時再切一層（位置對齊無法部分成功，只切一次不夠）', async () => {
+    const sizes: number[] = [];
+    const llm = async (prompt: string) => {
+      // prompt 用「請翻譯下列 N 句」帶出句數
+      const n = Number(prompt.match(/請翻譯下列 (\d+) 句/)?.[1] ?? 0);
+      sizes.push(n);
+      // 8 句以上一律少回一句（整包丟棄）；切到 4 句以下才正常
+      return JSON.stringify(Array.from({ length: n >= 8 ? n - 1 : n }, (_, i) => `第${i}句譯文`));
+    };
+    const r = await arr(llm, 16);
+    expect(Math.min(...sizes)).toBeLessThan(8); // 真的切到第二層
+    expect(r.byId.size).toBe(16); // 全部救回來
+  });
+
   it('品質地板照舊：簡體/原文照抄那句會被剔除', async () => {
     const r = await arr(async () => JSON.stringify(['甲的譯文', '这是简体输出', '丙的譯文']), 3);
     expect(r.byId.has(1)).toBe(false);

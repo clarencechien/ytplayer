@@ -92,8 +92,7 @@ video 路由的影片另有**字卡層**（🃏 疊畫面上緣、逐句稿有�
 |---|---|---|---|
 | **播放畫質 B 案** | [video-quality.md](docs/video-quality.md) | 1 天 | A 案（劇場模式）已上線、只解尺寸門檻。要 4K／Premium 畫質只剩 **B 案：ext 在 youtube.com 原生頁疊字幕**（僅桌機、兩套渲染要並存）|
 | **Glossary G2** | [glossary-layers.md](docs/glossary-layers.md) | 半天 | G1 已上線（疊層合併）；G2 = 儀表板編輯 + 「把自動抽的好譯法一鍵收進頻道表」|
-| **F2 lite A/B** | [future-ideas.md](docs/future-ideas.md) F2 | 半天（約 NT$35）| 位置對齊協定**程式已就緒但預設關閉** — 缺的只是照 SOP 跑一輪證據。過了就開，沒過就刪 |
-| **3.6-flash 重評** | [model-reeval-sop.md](docs/model-reeval-sop.md) | 約 NT$35 | F1 回聲對位上線 = 當初禁用它的前提已備妥，值得再測（判讀看 `echoRejects`）|
+| **大量補翻舊片** | [exp-2026-08-16.md](docs/exp-2026-08-16.md) E4 | 看片量 | 工具已備妥：lite + `TRANSLATE_PROTOCOL=array CHUNK_SIZE=15` = 一片 NT$0.89（vs 預設 NT$6.08），品質可接受、失敗看得見 |
 
 **2026-08-16 已上線（依相依順序 F4 → G1 → F1 → F3 → F2）**
 
@@ -119,6 +118,7 @@ video 路由的影片另有**字卡層**（🃏 疊畫面上緣、逐句稿有�
 | [docs/migration.md](docs/migration.md) | **kvsplayer 合併方案與執行紀錄（M0–M5 全數完成、保險絲設計、隱私）** |
 | [docs/future-ideas.md](docs/future-ideas.md) | **F1–F4 設計 + 實測結果**（回聲對位／lite 換協定／重評 SOP／ucid，含「原假設錯在哪」）|
 | [docs/model-reeval-sop.md](docs/model-reeval-sop.md) | **模型重評 SOP**：觸發條件、固定五步、判讀規則（候選 mean 要超出基準 min–max）|
+| [docs/exp-2026-08-16.md](docs/exp-2026-08-16.md) | **上線後補測**：G1 頻道表約束力、3.6-flash 重評、lite × 協定總表（含還沒測的誠實清單）|
 | [docs/glossary-layers.md](docs/glossary-layers.md) | Glossary 疊層（channel/genre/per-video）：G1+G3 已實作、G2 未做 |
 | [docs/pwa-plan.md](docs/pwa-plan.md) | PWA + 手機送片計畫與執行紀錄（桌機補收路線，已實作） |
 | [docs/cost-optimization.md](docs/cost-optimization.md) | 成本優化 L1+L2（已實作，單片 -51%）+ 單片費用解剖 + 漂移發現 |

@@ -5,10 +5,12 @@
 //   --repeat N  同設定重複 N 次，輸出 run-1..N 與 summary.json
 //               —— 這是「量自然變異」用的（docs/model-reeval-sop.md 第 2 步）：
 //               沒有這把尺，就無法宣稱候選模型／新協定「比較好」
+// 變因用環境變數：CHUNK_SIZE、TRANSLATE_PROTOCOL、
+//   SEED_GLOSSARY=<dir>（把本機 glossary 檔載進 MemR2，測 channel/genre 疊層用）
 // 需求：環境變數 gemini_key、HTTPS_PROXY（node fetch 需手動接 proxy）
 
 import { setGlobalDispatcher, ProxyAgent } from 'undici';
-import { writeFileSync, mkdirSync } from 'node:fs';
+import { writeFileSync, mkdirSync, readdirSync, readFileSync } from 'node:fs';
 import { runPipeline, type JobEnv } from '../src/jobs';
 
 const proxy = process.env.HTTPS_PROXY || process.env.https_proxy;
@@ -48,9 +50,18 @@ class MemR2 {
   }
 }
 
-// 費率與 /admin 的估算一致（in 47 / out 280 NT$/M；thinking 計輸出價）
-const estNTD = (total: number, prompt: number): number =>
-  Math.round(((prompt / 1e6) * 47 + ((total - prompt) / 1e6) * 280) * 100) / 100;
+// 費率表 NT$/M tokens（牌價 ×31，來源見 docs/model-experiment.md「外部資料驗證」）。
+// **必須逐模型分開**：拿 flash 的費率去估 lite 會高估 5 倍，直接讓 A/B 的成本結論失真
+//（2026-08-16 差點就這樣誤判 F2 的 gate）。thinking 一律計輸出價。
+const RATES: Array<[RegExp, { in: number; out: number }]> = [
+  [/lite/i, { in: 9.3, out: 77.5 }], // $0.30 / $2.50
+  [/3\.6-flash/i, { in: 47, out: 232.5 }], // $1.50 / $7.50
+  [/./, { in: 47, out: 280 }], // 3.5-flash 及未知模型：$1.50 / $9.00（保守取高）
+];
+const estNTD = (total: number, prompt: number, model: string): number => {
+  const r = RATES.find(([re]) => re.test(model))![1];
+  return Math.round(((prompt / 1e6) * r.in + ((total - prompt) / 1e6) * r.out) * 100) / 100;
+};
 
 interface RunMetrics {
   run: number;
@@ -78,6 +89,12 @@ const countIn = (arr: string[] | undefined, re: RegExp): number => {
 async function runOnce(videoId: string, model: string, source: string, outDir: string, run: number): Promise<RunMetrics> {
   const SUBS = new MemR2();
   await SUBS.put(`subs/${videoId}/source.json`, source);
+  // SEED_GLOSSARY=<dir>：把本機的 glossary 檔載進 MemR2（測疊層用；檔名即 R2 的 glossary/<檔名>）
+  if (process.env.SEED_GLOSSARY) {
+    for (const f of readdirSync(process.env.SEED_GLOSSARY)) {
+      await SUBS.put(`glossary/${f}`, readFileSync(`${process.env.SEED_GLOSSARY}/${f}`, 'utf8'));
+    }
+  }
   const env = {
     SUBS: SUBS as unknown as R2Bucket,
     GEMINI_API_KEY: process.env.gemini_key || process.env.GEMINI_API_KEY,
@@ -115,7 +132,7 @@ async function runOnce(videoId: string, model: string, source: string, outDir: s
     thoughtTokens: st.thoughtTokens ?? 0,
     llmCalls: st.llmCalls ?? 0,
     retries: st.retries ?? 0,
-    estNTD: estNTD(st.tokensUsed ?? 0, st.promptTokens ?? 0),
+    estNTD: estNTD(st.tokensUsed ?? 0, st.promptTokens ?? 0, model),
   };
 }
 

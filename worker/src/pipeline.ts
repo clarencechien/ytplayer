@@ -378,8 +378,12 @@ export async function translateChunk(
     }
   }
 
-  // 仍缺句且量大：切半分治一次（對付輸出截斷與單點毒句 — 整包重打救不了這兩種）
-  if (byId.size < expected && depth === 0 && chunk.target.length > 10) {
+  // 仍缺句且量大：切半分治（對付輸出截斷與單點毒句 — 整包重打救不了這兩種）。
+  // 位置對齊協定多切一層、門檻也放寬：它無法部分成功（長度不符整包丟），
+  // 只切一次的話一個壞掉的半包就是連續 7 句沒翻 —— 實測 e4a 第 3 輪就是這樣掉了 7 句
+  const maxDepth = protocol === 'array' ? 2 : 1;
+  const minSplit = protocol === 'array' ? 4 : 10;
+  if (byId.size < expected && depth < maxDepth && chunk.target.length > minSplit) {
     const mid = Math.ceil(chunk.target.length / 2);
     const firstHalf: TranslateChunkInput = {
       before: chunk.before,
@@ -392,8 +396,8 @@ export async function translateChunk(
       after: chunk.after,
     };
     const [a, b] = await Promise.all([
-      translateChunk(llm, meta, glossary, firstHalf, sourceLang, 1, protocol),
-      translateChunk(llm, meta, glossary, secondHalf, sourceLang, 1, protocol),
+      translateChunk(llm, meta, glossary, firstHalf, sourceLang, depth + 1, protocol),
+      translateChunk(llm, meta, glossary, secondHalf, sourceLang, depth + 1, protocol),
     ]);
     retries += a.retries + b.retries + 1;
     problems.push(...a.problems, ...b.problems);

@@ -42,6 +42,10 @@
 不可省的人工抽樣。`ab-runner --repeat N` 會自動產出變異表。
 
 已結案的實驗結論（別重跑）：
+- ~~3.6-flash 重評~~：**2026-08-16 已測，維持禁用** —— 理由已更新為「沒有優勢」
+  （慢 4.5 倍、tokens +34%、未譯更多）；當年的「會譯錯句」已被回聲對位擋住
+- ~~lite 換協定~~：**已測，假說成立**（重試 -85%、成本 NT$0.89/片），
+  但預設仍用 3.5-flash；lite + `TRANSLATE_PROTOCOL=array CHUNK_SIZE=15` 定位為大量補翻工具
 - ~~lite 縮 chunk 再戰~~：**已測否決**（2026-08-14，E 組缺句反而更多 — 病根是 index-keyed
   協定對 lite 的 id 紀律要求，換協定才有救，見 model-experiment.md）
 - ~~id 連號檢查~~：**已實作**（`assertIdSanity` — 重複/亂序整包打回重試）；
