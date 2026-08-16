@@ -178,7 +178,12 @@ admin 頁 + Access、genre glossary。
 kvsplayer.ai-apps.work DNS 指向 ytplayer（或加 301 轉址）。
 **Gate**：抽 3 支舊韓綜在 ytplayer 正常播放（含字卡）；舊連結可達。
 
-### M5 — 關閉 kvsplayer
+### M5 — 關閉 kvsplayer（**程式面 2026-08-14 完成**）
+
+程式面已做：移除 KVS 綁定、刪除 `migrate.ts` 與其路由/測試；看片譯名表改為
+「R2 有自訂版就用、否則用 repo 內建 `src/data/watch-glossary-ko.json`」——
+不再依賴任何一次性匯入動作。剩下的都是人工步驟：
+
 確認 M4 gate 過後：刪 kvsplayer Worker、kvs-jobs queue；`kvs-krsub` **保留 30 天**再刪（保險）；
 ytpoc repo 封存（README 指向 ytplayer）。lessons-learned / README tier 表 / 兩份決策欄回填收尾。
 

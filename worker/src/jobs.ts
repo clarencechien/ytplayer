@@ -29,6 +29,7 @@ import {
   type PipelineStats,
 } from './pipeline';
 import { retimeCues } from './retime';
+import watchGlossaryKo from './data/watch-glossary-ko.json'; // 韓綜譯名表（kvsplayer 移植，看片路線預設）
 import {
   initWatchState,
   nextSegment,
@@ -371,9 +372,15 @@ async function watchStep(env: JobEnv, videoId: string, watchOverride?: WatchLlmF
         meter.tokens += n;
       }
     );
-  // 譯名表（頻道/genre 鎖定，跨片沿用 — kvsplayer 資產，M4 遷移時匯入 R2）
-  const glossaryObj = await env.SUBS.get(`glossary/watch-${(await jsonGet<WatchRequest>(env, `subs/${videoId}/watch.json`))?.lang || 'ko'}.json`);
-  const glossary = glossaryObj ? await glossaryObj.text() : '[]';
+  // 譯名表（跨片沿用的 kvsplayer 資產）：R2 有自訂版就用它，否則用 repo 內建的預設表。
+  // 內建 fallback 讓看片路線不依賴任何一次性的匯入動作（M5 刪掉 migrate.ts 後仍然可用）
+  const lang = (await jsonGet<WatchRequest>(env, `subs/${videoId}/watch.json`))?.lang || 'ko';
+  const glossaryObj = await env.SUBS.get(`glossary/watch-${lang}.json`);
+  const glossary = glossaryObj
+    ? await glossaryObj.text()
+    : lang === 'ko'
+      ? JSON.stringify(watchGlossaryKo)
+      : '[]';
 
   try {
     meter.calls += 1;

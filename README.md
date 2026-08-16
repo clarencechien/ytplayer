@@ -81,9 +81,17 @@ video 路由的影片另有**字卡層**（🃏 疊畫面上緣、逐句稿有�
 
 每項都有寫好的計畫文件與**留白的決策欄**；動工前先填決策欄（本專案工作風格：先計劃再動手）。
 
+> **2026-08-14 已完成並移出 backlog**：畫質 A 案（劇場模式 T 鍵 + 畫質顯示）、
+> 成本優化 L1+L2（單片 -51%）、PWA 手機送片（inbox 佇列 + ext badge 補收）、
+> M5 程式面收尾（KVS 綁定與 migrate.ts 已移除）。**M5 剩人工步驟見下方**。
+
+**待人工操作（程式面都完成了）**
+- 刪 kvsplayer 的 Worker 與 `kvs-jobs` queue；**先拔掉它的 `GEMINI_API_KEY`** 即可立即除險
+- `kvs-krsub` bucket 保留 30 天後再刪（保險）
+- 封存 ytpoc repo（README 指向 ytplayer）
+
 | 項目 | 計畫 | 規模 | 現況／前提 |
 |---|---|---|---|
-| **M5 關閉 kvsplayer** | [migration.md](docs/migration.md) §M5 | 小（多為人工）| 資料已遷完；待刪 Worker/queue、`kvs-krsub` 保留 30 天後刪；程式面要移除 KVS 綁定與 `migrate.ts` |
 | **成本優化（重試效率）** | [cost-optimization.md](docs/cost-optimization.md) | 半天–1 天 | 實測：9 分鐘片 NT$10.87，**六成是重試重吐譯文**。L1 補丁式重試預估 -47%。目前用量下「省錢但不急」；要大量補翻舊片就是前置條件 |
 | **PWA + 手機送片** | [pwa-plan.md](docs/pwa-plan.md) | 1–1.5 天 | 手機分享 → key-gated inbox 佇列 → 桌機 ext badge 提醒補收。**刻意不做伺服器抓字幕**（POT + IP 封鎖）|
 | **播放畫質（iframe 720p）** | [video-quality.md](docs/video-quality.md) | A 案 1 小時 / B 案 1 天 | 成因：ABR 跟播放器尺寸走 + 畫質 API 已失效 + Premium 綁登入（iframe 是第三方情境）。**A 案劇場模式**可望突破尺寸門檻；要 4K/Premium 只剩 **B 案：ext 在 youtube.com 原生頁疊字幕**（僅桌機、兩套渲染）|
@@ -103,7 +111,7 @@ video 路由的影片另有**字卡層**（🃏 疊畫面上緣、逐句稿有�
 | 路徑 | 內容 |
 |---|---|
 | `ext/` | MV3 擴充功能（攔截式 ingest），安裝見 [ext/README.md](ext/README.md) |
-| `worker/` | CF Worker。部署見 [worker/README.md](worker/README.md)。主要模組：`jobs.ts`（Queues 步進引擎 + 保險絲）、`pipeline.ts`（text 路由演算法 + 路由表）、`watch.ts`（video 路由/看片）、`migrate.ts`（kvsplayer 遷移，M5 後移除）、`player.ts`（player/清單/admin 頁） |
+| `worker/` | CF Worker。部署見 [worker/README.md](worker/README.md)。主要模組：`jobs.ts`（Queues 步進引擎 + 保險絲）、`pipeline.ts`（text 路由演算法 + 路由表）、`watch.ts`（video 路由/看片）、`player.ts`（player/清單/admin 頁） |
 | `phase0/` | 可行性探測工具與原始資料 |
 | [docs/handoff.md](docs/handoff.md) | 原始任務書（分階段規格） |
 | [docs/handoff-append-01.md](docs/handoff-append-01.md) | 影片分層策略增補 |
