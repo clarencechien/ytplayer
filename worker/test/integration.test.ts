@@ -122,18 +122,71 @@ describe('runPipeline（in-process 整合）', () => {
     expect(readJson(SUBS, 'subs/ksfm6jeTg3Q/glossary.json').layers.channelKey).toBe('claude');
   });
 
-  it('翻譯持續缺句 → fallback 原文 + warnings 非空（驗收會擋）', async () => {
+  it('翻譯持續缺句 → 自動補譯兩輪；補不動就 fallback 原文 + warnings 非空（驗收會擋）', async () => {
     const SUBS = new FakeR2();
     await SUBS.put('subs/ksfm6jeTg3Q/source.json', JSON.stringify(makeSource()));
     const partialLlm = async (prompt: string): Promise<string> => {
       if (prompt.includes('術語編輯')) return '[]';
       return '[{"id":0,"zh":"只有第一句。"}]';
     };
+    // assemble 發現未譯 → 自動接 patch（docs/patch-untranslated.md P1），
+    // 模型還是只回第一句 → 補不動，兩輪後停手並照舊標記
     const r = await runPipeline(envOf(SUBS), 'ksfm6jeTg3Q', false, partialLlm);
     expect(r.status).toBe(200);
-    const stats = (r.body as { stats: { untranslated: number; warnings: string[] } }).stats;
-    expect(stats.untranslated).toBe(2);
-    expect(stats.warnings.some((w) => w.includes('翻譯失敗'))).toBe(true);
+    expect(r.body).toMatchObject({ patched: 0, left: 2, round: 2 }); // 上限 2 輪，不無限補
+
+    const bil = readJson(SUBS, 'subs/ksfm6jeTg3Q/bilingual.json');
+    expect(bil.cues.filter((c: { untranslated?: boolean }) => c.untranslated)).toHaveLength(2);
+    expect(bil.warnings.some((w: string) => w.includes('翻譯失敗'))).toBe(true);
+    const st = readJson(SUBS, 'subs/ksfm6jeTg3Q/status.json') as JobStatus;
+    expect(st.untranslated).toBe(2); // 儀表板看得到
+    expect(st.patchRounds).toBe(2);
+  });
+
+  it('自動補譯：第二次呼叫給得出譯文時，未譯歸零且時間軸不變', async () => {
+    const SUBS = new FakeR2();
+    await SUBS.put('subs/ksfm6jeTg3Q/source.json', JSON.stringify(makeSource()));
+    let firstPass = true;
+    const flakyLlm = async (prompt: string): Promise<string> => {
+      if (prompt.includes('術語編輯')) return '[]';
+      const ids = [...prompt.matchAll(/^(\d+): /gm)].map((m) => Number(m[1]));
+      if (firstPass && ids.length === 3) {
+        firstPass = false; // 第一輪整包只回第一句，其餘進補譯
+        return '[{"id":0,"zh":"只有第一句。"}]';
+      }
+      return JSON.stringify(ids.map((id) => ({ id, zh: `補回來的中文${id}。` })));
+    };
+    const r = await runPipeline(envOf(SUBS), 'ksfm6jeTg3Q', false, flakyLlm);
+    expect(r.status).toBe(200);
+
+    const bil = readJson(SUBS, 'subs/ksfm6jeTg3Q/bilingual.json');
+    expect(bil.cues.filter((c: { untranslated?: boolean }) => c.untranslated)).toHaveLength(0);
+    expect(bil.cues[1].zh).toContain('補回來的中文');
+    expect(bil.cues[1].end).toBe(5.95); // 補譯不動時間軸
+    expect(bil.warnings.every((w: string) => !w.includes('翻譯失敗'))).toBe(true); // 過期的警告要清掉
+    expect(SUBS.store.get('subs/ksfm6jeTg3Q/bilingual.srt')!.value).toContain('補回來的中文');
+    expect((readJson(SUBS, 'subs/ksfm6jeTg3Q/status.json') as JobStatus).untranslated).toBe(0);
+  });
+
+  it('只有標點的句子（「。」）不送模型、也不算未譯', async () => {
+    const SUBS = new FakeR2();
+    const src = makeSource();
+    src.cues = [...src.cues, { start: 8, dur: 2, text: '。' }];
+    await SUBS.put('subs/ksfm6jeTg3Q/source.json', JSON.stringify(src));
+    const asked: number[][] = [];
+    const llm = async (prompt: string): Promise<string> => {
+      if (prompt.includes('術語編輯')) return '[]';
+      const ids = [...prompt.matchAll(/^(\d+): /gm)].map((m) => Number(m[1]));
+      asked.push(ids);
+      return JSON.stringify(ids.map((id) => ({ id, zh: `中文${id}。` })));
+    };
+    const r = await runPipeline(envOf(SUBS), 'ksfm6jeTg3Q', false, llm);
+    expect(r.status).toBe(200);
+    const bil = readJson(SUBS, 'subs/ksfm6jeTg3Q/bilingual.json');
+    const dot = bil.cues[bil.cues.length - 1];
+    expect(dot.orig).toBe('。');
+    expect(dot.untranslated).toBeUndefined(); // 沒東西可翻 ≠ 翻譯失敗
+    expect(asked.flat()).not.toContain(3); // 也沒被送去翻
   });
 
   it('英文 ASR：先修稿再翻，orig 是修好的版本、trust 是 asr-repaired', async () => {
