@@ -187,6 +187,32 @@ describe('video 路由端到端（queue）', () => {
     expect([...SUBS.store.keys()].filter((k) => k.includes('/parts/'))).toEqual([]);
   });
 
+  // G1：看片路線沒有頻道 meta，鎖定表由 watch.json 的 channel 欄位指定。
+  // 沒指定就只吃 genre —— 這正是「A 節目的人名不會塞進 B 節目 prompt」的修法
+  it('看片譯名表 = merge(channel, genre)，channel 由 watch.json 指定', async () => {
+    const run = async (channel?: string): Promise<string> => {
+      const SUBS = new FakeR2();
+      await SUBS.put(
+        'subs/AAAAAAAAAAA/watch.json',
+        JSON.stringify({ requestedAt: new Date().toISOString(), durationMin: 3, lang: 'ko', ...(channel ? { channel } : {}) })
+      );
+      let seen = '';
+      const spy: WatchLlmFn = async (a) => {
+        seen = a.glossary;
+        return fakeWatch(a);
+      };
+      await runPipeline(envOf(SUBS), 'AAAAAAAAAAA', false, undefined, 'video', spy);
+      return seen;
+    };
+    const withChannel = await run('15ya');
+    expect(withChannel).toContain('막내'); // genre 通用詞
+    expect(withChannel).toContain('나영석'); // channel 人名鎖定
+
+    const withoutChannel = await run();
+    expect(withoutChannel).toContain('막내');
+    expect(withoutChannel).not.toContain('나영석');
+  });
+
   it('看門狗把 pending 的 watch 請求排回去（route: video）', async () => {
     const SUBS = new FakeR2();
     const q = new FakeQueue();

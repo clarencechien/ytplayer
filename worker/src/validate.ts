@@ -16,6 +16,7 @@ export interface IngestPayload {
   meta: {
     title: string;
     channel: string;
+    channelId?: string; // UC… 頻道穩定鍵值（ext 抓得到才帶），glossary channel 疊層用
     description: string;
     durationSec: number;
   };
@@ -24,6 +25,7 @@ export interface IngestPayload {
 }
 
 const VIDEO_ID = /^[A-Za-z0-9_-]{11}$/;
+const UCID = /^UC[\w-]{22}$/;
 const LANG = /^[A-Za-z]{2,3}(-[A-Za-z0-9]{2,8})*$/;
 
 export function validateIngest(p: unknown): string[] {
@@ -42,6 +44,10 @@ export function validateIngest(p: unknown): string[] {
   } else {
     if (typeof meta.title !== 'string' || meta.title.length === 0) errors.push('meta.title 缺失');
     if (typeof meta.channel !== 'string') errors.push('meta.channel 缺失');
+    // 選填：舊版 ext 沒有這欄（glossary 會退回名稱 slug）。有帶就必須是合法 ucid —
+    // 錯的鍵值比沒有更糟（會靜靜地查不到 channel 表）
+    if (meta.channelId !== undefined && (typeof meta.channelId !== 'string' || !UCID.test(meta.channelId)))
+      errors.push('meta.channelId 格式錯誤（應為 UC 開頭 24 字）');
     if (typeof meta.description !== 'string' || meta.description.length > 4000)
       errors.push('meta.description 缺失或超過 4000 字');
     if (typeof meta.durationSec !== 'number' || !Number.isFinite(meta.durationSec) || meta.durationSec < 0)

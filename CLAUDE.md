@@ -16,29 +16,40 @@
    cron 是零成本看門狗，永不碰 LLM
 5. **花費保險絲四層**不可拆：Google prepay → 每步 3 次重試永久失敗 → 每片 token 上限
    （計數跨重排累計，別改回歸零）→ 全域日預算。花費可視：`/health`、`/admin` 儀表板
-6. 模型輸出視為敵意輸入 — 品質地板靠 deterministic 檢查（`sanityCheckItem`、禁用詞三層），
-   不靠 LLM 自我審查
+6. 模型輸出視為敵意輸入 — 品質地板靠 deterministic 檢查（`sanityCheckItem`、禁用詞三層、
+   `assertIdSanity`、**回聲對位 `t`**），不靠 LLM 自我審查。
+   取捨原則：**寧可看得見地失敗（標 untranslated），也不要安靜地錯（譯文對到隔壁句）**
 7. 工作風格：**先計劃再動手**（大改動先落 docs/*.md 計畫）；實驗結論回填文件的決策欄
 
 ## 常用操作
 
-- 測試：`cd worker && npx vitest run`（95+ 個，push 前必綠）
+- 測試：`cd worker && npx vitest run`（130 個，push 前必綠）
 - 手動翻譯：`POST /translate/{id}?force=1`（key：`x-ingest-key`）；A/B 擂台：`&model=…`
 - 進度/花費：`/subs/{id}/status.json`、`/admin` 儀表板
 - 部署：merge 到 main → Workers Builds 自動部署（production branch 設定在 CF dashboard）
 
 ## 待辦與懸案
 
-**完整 backlog 看 [README.md](README.md) 的「Backlog」段**（每項都有計畫文件 + 留白的決策欄）：
-目前只剩 **畫質 B 案**（ext 在 YT 原生頁疊字幕）與 **glossary 疊層 G1**；
-有設計未排程的四項在 [docs/future-ideas.md](docs/future-ideas.md)（F1 回聲對位 > F3 重評 SOP >
-F4 ext ucid > F2 lite 換協定）。
+**完整 backlog 看 [README.md](README.md) 的「Backlog」段**：目前只剩 **畫質 B 案**、
+**glossary G2**（儀表板編輯／一鍵收進頻道表）、**F2 lite A/B**（程式好了缺證據）、
+**3.6-flash 重評**（F1 上線後前提已備妥）。
 
 已完成收工（別重做）：M0–M5 全部（kvsplayer 已關閉、合併結案）、畫質 A 案（劇場模式）、
-成本優化 L1+L2（單片 -51%）、PWA 手機送片。
+成本優化 L1+L2（單片 -51%）、PWA 手機送片、**glossary 疊層 G1 + F1–F4**（2026-08-16）。
+
+換模型／換協定前**先看 [docs/model-reeval-sop.md](docs/model-reeval-sop.md)**：
+觸發條件 + 固定五步（先量自然變異 3 次，候選 mean 要超出基準 min–max 才算有差）+
+不可省的人工抽樣。`ab-runner --repeat N` 會自動產出變異表。
 
 已結案的實驗結論（別重跑）：
+- ~~3.6-flash 重評~~：**2026-08-16 已測，維持禁用** —— 理由已更新為「沒有優勢」
+  （慢 4.5 倍、tokens +34%、未譯更多）；當年的「會譯錯句」已被回聲對位擋住
+- ~~lite 換協定~~：**已測，假說成立**（重試 -85%、成本 NT$0.89/片），
+  但預設仍用 3.5-flash；lite + `TRANSLATE_PROTOCOL=array CHUNK_SIZE=15` 定位為大量補翻工具
 - ~~lite 縮 chunk 再戰~~：**已測否決**（2026-08-14，E 組缺句反而更多 — 病根是 index-keyed
   協定對 lite 的 id 紀律要求，換協定才有救，見 model-experiment.md）
 - ~~id 連號檢查~~：**已實作**（`assertIdSanity` — 重複/亂序整包打回重試）；
   3.6-flash 若要重新評估，前提已備妥，但仍需同料 A/B + 抽樣人工比對
+- ~~回聲對位能修子句邊界漂移~~：**假設已否決**（2026-08-16 實測 drift 沒降）——
+  它修的是「譯文對到隔壁句」，漂移是另一回事（模型把語意重新分配到相鄰 cue），
+  兩者別再混為一談（future-ideas.md F1「原設計錯在哪」）

@@ -27,9 +27,16 @@ import {
   type GlossaryEntry,
   type BilingualCue,
   type PipelineStats,
+  type TranslateProtocol,
 } from './pipeline';
 import { retimeCues } from './retime';
-import watchGlossaryKo from './data/watch-glossary-ko.json'; // 韓綜譯名表（kvsplayer 移植，看片路線預設）
+import {
+  loadChannelLayer,
+  loadGenreLayer,
+  mergeGlossary,
+  channelKeys,
+  type LayeredEntry,
+} from './glossary'; // 疊層合併（docs/glossary-layers.md G1）
 import {
   initWatchState,
   nextSegment,
@@ -106,6 +113,10 @@ export interface JobEnv {
   WATCH_TOKEN_CAP?: string; // video 路由每片上限，預設 3M（看片 ≈ 300 tok/秒，30 分鐘 ≈ 54 萬 + 重試餘裕）
   DAILY_TOKEN_CAP?: string; // 每日全域 token 上限（第 4 層），預設 2M
   CHUNK_SIZE?: string; // 每 chunk 句數，預設 40（lite 級模型建議 20 — gemini-api-lessons §2）
+  // 翻譯輸出協定（docs/future-ideas.md F2）：預設 id（含回聲對位 t）。
+  // 'array' = 按位置對齊的純字串陣列，給 lite 級模型用 —— **尚未通過 A/B 驗證，預設不啟用**；
+  // 要開必須同時把 CHUNK_SIZE 調小（10–15），因為它無法部分成功（長度不符整包重來）
+  TRANSLATE_PROTOCOL?: string;
 }
 
 // video 路由的 ingest 請求檔（admin 貼連結 / API 建立）
@@ -114,6 +125,7 @@ export interface WatchRequest {
   durationMin?: number; // 使用者提供片長 → 關閉 open 模式（countTokens 估算會低估）
   lang?: string; // 原文語言標籤，預設 ko
   title?: string;
+  channel?: string; // glossary channel 鎖定表鍵值（例 15ya）；看片路線沒有頻道 meta，只能人工指定
 }
 
 const chunkSize = (env: JobEnv): number => {
@@ -372,15 +384,16 @@ async function watchStep(env: JobEnv, videoId: string, watchOverride?: WatchLlmF
         meter.tokens += n;
       }
     );
-  // 譯名表（跨片沿用的 kvsplayer 資產）：R2 有自訂版就用它，否則用 repo 內建的預設表。
-  // 內建 fallback 讓看片路線不依賴任何一次性的匯入動作（M5 刪掉 migrate.ts 後仍然可用）
-  const lang = (await jsonGet<WatchRequest>(env, `subs/${videoId}/watch.json`))?.lang || 'ko';
-  const glossaryObj = await env.SUBS.get(`glossary/watch-${lang}.json`);
-  const glossary = glossaryObj
-    ? await glossaryObj.text()
-    : lang === 'ko'
-      ? JSON.stringify(watchGlossaryKo)
-      : '[]';
+  // 譯名表 = merge(① channel, ② genre)（G1）。看片路線沒有 channel meta，鎖定表由
+  // watch.json 的 channel 欄位人工指定（/admin 表單）；沒指定就只吃 genre —— 這正是
+  // 「A 節目的人名不會塞進 B 節目的 prompt」的修法。內建表讓它不依賴任何匯入動作。
+  const wreq = await jsonGet<WatchRequest>(env, `subs/${videoId}/watch.json`);
+  const lang = wreq?.lang || 'ko';
+  const merged = mergeGlossary({
+    channel: (await loadChannelLayer(env.SUBS, wreq?.channel ? [wreq.channel] : [])).entries,
+    genre: await loadGenreLayer(env.SUBS, lang),
+  });
+  const glossary = JSON.stringify(merged.map(({ term, zh }) => ({ term, zh })));
 
   try {
     meter.calls += 1;
@@ -674,12 +687,12 @@ async function glossaryStep(env: JobEnv, videoId: string, llmOverride?: LlmFn): 
   const existing = await jsonGet<{ sourceUploaded?: string }>(env, `subs/${videoId}/glossary.json`);
   if (!existing || existing.sourceUploaded !== st.sourceUploaded) {
     const llm = makeStepLlm(env, meter, 4, llmOverride, modelOf(env, st));
-    let glossary: GlossaryEntry[] = [];
+    let auto: GlossaryEntry[] = [];
     for (let attempt = 0; attempt < 2; attempt++) {
       try {
         const parsed = cleanJson(await llm(buildGlossaryPrompt(src.meta, sentences, src.track.languageCode)));
         if (!Array.isArray(parsed)) throw new Error('glossary 不是陣列');
-        glossary = parsed
+        auto = parsed
           .map((g): Partial<GlossaryEntry> => ({
             term: g?.term,
             zh: g?.zh ?? g?.suggested_zh, // 舊 schema 相容
@@ -693,7 +706,25 @@ async function glossaryStep(env: JobEnv, videoId: string, llmOverride?: LlmFn): 
         else st.warnings.push(`glossary 失敗，以空表續跑：${e instanceof Error ? e.message : e}`);
       }
     }
-    await jsonPut(env, `subs/${videoId}/glossary.json`, { videoId, model, sourceUploaded: st.sourceUploaded, glossary });
+    // 疊層合併（G1）：人工養的 ①② 壓過當片自動抽的 ③ —— 這是「好譯法能沉澱」的機制。
+    // ①② 是 R2 上的人工檔，改了不會自動觸發重翻（便宜、可預期）；要套用新表請 ?force=1
+    const channel = await loadChannelLayer(env.SUBS, channelKeys(src.meta));
+    const genre = await loadGenreLayer(env.SUBS, src.track.languageCode);
+    const glossary: LayeredEntry[] = mergeGlossary({ channel: channel.entries, genre, auto });
+    await jsonPut(env, `subs/${videoId}/glossary.json`, {
+      videoId,
+      model,
+      sourceUploaded: st.sourceUploaded,
+      // 層來源（除錯用）：譯法怪掉時一眼看出是誰貢獻的那條
+      layers: {
+        channelKey: channel.key ?? null,
+        channel: channel.entries.length,
+        genre: genre.length,
+        auto: auto.length,
+        merged: glossary.length,
+      },
+      glossary,
+    });
   }
 
   st.stage = 'glossary';
@@ -730,18 +761,23 @@ async function translateStep(env: JobEnv, videoId: string, batch: number, llmOve
   const meter: StepMeter = newMeter();
   const llm = makeStepLlm(env, meter, chunks.length * 9 + 2, llmOverride, modelOf(env, st)); // 含切半分治與禁用詞重打的預算
   let retries = 0;
+  let echoOff = 0; // 模型不回 t 的 chunk 數（回聲對位失效 — 可見但不擋，見 assembleStep 的 hints）
+  let echoRejects = 0; // 被回聲對位擋下重譯的句次（F1 的成效指標）
   const entries: Array<[number, { zh: string; note?: string }]> = [];
   const problems: string[] = [];
+  const protocol: TranslateProtocol = env.TRANSLATE_PROTOCOL === 'array' ? 'array' : 'id';
   const outcomes = await Promise.all(
-    chunks.map((c) => translateChunk(llm, src.meta, glossaryDoc.glossary, c, src.track.languageCode))
+    chunks.map((c) => translateChunk(llm, src.meta, glossaryDoc.glossary, c, src.track.languageCode, 0, protocol))
   );
   for (let i = 0; i < outcomes.length; i++) {
     const o = outcomes[i];
     retries += o.retries;
+    if (o.echoOff) echoOff++;
+    echoRejects += o.echoRejects;
     if (o.problems.length > 0) problems.push(`chunk ${batch * CHUNKS_PER_BATCH + i + 1}/${allChunks.length}：${o.problems.join('；')}`);
     for (const [id, v] of o.byId) entries.push([id, v]);
   }
-  await jsonPut(env, partKey, { sourceUploaded: st.sourceUploaded, entries, problems, retries });
+  await jsonPut(env, partKey, { sourceUploaded: st.sourceUploaded, entries, problems, retries, echoOff, echoRejects });
 
   st.stage = 'translate';
   st.step = `${batch + 1}/${total}`;
@@ -776,14 +812,20 @@ async function assembleStep(env: JobEnv, videoId: string): Promise<StepResult> {
   const byId = new Map<number, { zh: string; note?: string }>();
   const warnings = [...st.warnings];
   const total = st.translateBatches ?? 0;
+  let echoOff = 0;
+  let echoRejects = 0;
   for (let b = 0; b < total; b++) {
     const part = await jsonGet<{
       sourceUploaded: string;
       entries: Array<[number, { zh: string; note?: string }]>;
       problems: string[];
+      echoOff?: number;
+      echoRejects?: number;
     }>(env, `subs/${videoId}/parts/translate_${b}.json`);
     if (!part || part.sourceUploaded !== st.sourceUploaded) throw new Error(`translate part ${b} 缺失，無法組裝`);
     warnings.push(...part.problems);
+    echoOff += part.echoOff ?? 0;
+    echoRejects += part.echoRejects ?? 0;
     for (const [id, v] of part.entries) byId.set(id, v);
   }
 
@@ -795,6 +837,11 @@ async function assembleStep(env: JobEnv, videoId: string): Promise<StepResult> {
   const hints = extendedHits.length > 0 ? [`疑似中國用語（OpenCC 參考，僅提示）：${extendedHits.slice(0, 20).join('、')}`] : [];
   // 子句邊界漂移：ASR 碎片翻譯的既有現象，僅提示（新舊版都有，見 cost-optimization.md §8）
   if (driftCount > 0) hints.push(`${driftCount} 句疑似子句邊界漂移（長原文配極短譯文，單句對位可能偏移）`);
+  // 回聲對位失效要看得見：模型不回 t 時我們會退回「只靠 id」的舊行為，
+  // 這支影片就沒有對位保護 —— 換模型時這行是第一個該看的東西（docs/future-ideas.md F1）
+  if (echoOff > 0) hints.push(`${echoOff} 個 chunk 的模型未回 t 欄位，該段回聲對位未生效（退回只靠 id）`);
+  // F1 的成效指標：被擋下的都已重譯（不是缺句），這行是「回聲對位有沒有在做事」的唯一硬證據
+  if (echoRejects > 0) hints.push(`回聲對位攔下 ${echoRejects} 句次對位不符的譯文（已重譯）`);
   const autoNotes = attachGlossaryNotes(cues, glossaryDoc.glossary);
 
   // schema v2（migration.md §1）：orig 取代 en、kind 標記 speech/card、trust 標記信任等級

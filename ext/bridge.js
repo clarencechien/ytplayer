@@ -62,6 +62,9 @@ async function getState() {
         meta: {
           title: pr.videoDetails?.title ?? '',
           channel: pr.videoDetails?.author ?? '',
+          // 頻道的穩定鍵值（UC…）：頻道名稱可改、可重複，glossary channel 疊層要靠它
+          //（docs/glossary-layers.md §3）。抓不到就不帶欄位，Worker 端會退回名稱 slug
+          ...(/^UC[\w-]{22}$/.test(pr.videoDetails?.channelId ?? '') ? { channelId: pr.videoDetails.channelId } : {}),
           description: (pr.videoDetails?.shortDescription ?? '').slice(0, 2000),
           durationSec: Number(pr.videoDetails?.lengthSeconds ?? 0),
         },

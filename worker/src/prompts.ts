@@ -9,7 +9,9 @@
 import type { Sentence } from './segment';
 import type { GlossaryEntry } from './pipeline';
 
-export const PROMPT_VERSION = 'v4';
+// v5：翻譯輸出加回聲欄位 t（原文前 12 字元），讓「這句譯文對到哪句原文」可驗證
+//（docs/future-ideas.md F1 — 子句邊界漂移與 id 對滑的共同修法）
+export const PROMPT_VERSION = 'v5';
 
 // handoff §4.4 對照表。左：禁用（中國用語），右：台灣慣用。程式端掃描 + prompt 內文皆用此表。
 export const BANNED_WORDS: Array<[string, string]> = [
@@ -39,6 +41,7 @@ export const BANNED_EXCEPTIONS: Record<string, RegExp> = {
 export interface PromptMeta {
   title: string;
   channel: string;
+  channelId?: string; // UC… 穩定鍵值（舊 source 沒有 — glossary 會退回名稱 slug）
   description: string;
 }
 
@@ -123,7 +126,54 @@ ${chunk.target.map((s) => `${s.id}: ${s.text}`).join('\n')}
 ${chunk.after.map((s) => s.text).join('\n') || '（無）'}
 
 輸出：純 JSON 陣列，無 markdown 圍欄、無說明文字。格式：
-[{"id":0,"zh":"中文翻譯","note":"選填譯註"}]`;
+[{"id":0,"t":"原文前 12 個字元","zh":"中文翻譯","note":"選填譯註"}]
+
+t 欄位（必填，不可省略）：把該 id 的**原文**開頭原樣照抄約 12 個字元 —— 不要翻譯、不要改寫、
+不要補全成完整句子。這是用來確認你沒有把譯文對到別句的回聲欄位；對不上的句子會被丟棄重譯。`;
+}
+
+// F2 位置對齊協定（docs/future-ideas.md F2）：不給 id、輸出純字串陣列，第 n 個 = 第 n 句。
+// 動機：lite 級模型缺句的病根不是能力而是「維持 id 紀律」的負擔（model-experiment.md E 組）。
+// 代價：無法部分成功（長度不符整包重來）→ 必須配小 chunk。預設不啟用，待 A/B 驗證。
+export function buildTranslateArrayPrompt(
+  meta: PromptMeta,
+  glossary: GlossaryEntry[],
+  chunk: TranslateChunkInput,
+  extraHint?: string,
+  sourceLang = 'en'
+): string {
+  const glossaryText = glossary.length
+    ? glossary.map((g) => `- ${g.term} → ${g.zh}${g.note ? `（${g.note}）` : ''}`).join('\n')
+    : '（無）';
+  return `你是資深字幕譯者，把影片字幕從原文（語言：${sourceLang}）翻成道地的台灣正體中文。品質目標：明顯高於機器翻譯，讀起來像台灣人寫的字幕。
+${AUDIENCE}
+
+影片背景（幫助理解語境，不用翻譯）：
+標題：${meta.title}／頻道：${meta.channel}
+簡介節錄：${meta.description.slice(0, 300)}
+
+術語表（全片必須一致，照表中 zh 的形式使用）：
+${glossaryText}
+
+語言規範：
+- 台灣正體中文，台灣慣用詞彙與語感
+- 嚴禁中國用語，對照表：${bannedTable()}、視頻博主→YouTuber
+- 避免翻譯腔，口語但精準
+- 不在術語表中的專有名詞、技術縮寫：保留英文原文
+${extraHint ? `\n特別注意：${extraHint}\n` : ''}
+上文（僅供銜接語氣，不要翻譯）：
+${chunk.before.map((s) => s.text).join('\n') || '（無）'}
+
+請翻譯下列 ${chunk.target.length} 句（每行一句）：
+${chunk.target.map((s) => s.text).join('\n')}
+
+下文（僅供銜接語氣，不要翻譯）：
+${chunk.after.map((s) => s.text).join('\n') || '（無）'}
+
+輸出：純 JSON 字串陣列，無 markdown 圍欄、無說明文字、不要 id 也不要物件。
+**陣列長度必須剛好 ${chunk.target.length}**，第 n 個元素就是上面第 n 句的譯文；
+一句都不能少、不能合併、不能拆開 —— 數量不符整批作廢。格式：
+["第一句的譯文","第二句的譯文"]`;
 }
 
 // Phase 2.5 — ASR 修稿（原文語言由 sourceLang 決定，勿寫死英文：

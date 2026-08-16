@@ -1,7 +1,8 @@
 # Glossary 疊層計畫（channel / genre / per-video）
 
-> 狀態：**計畫，未實作**。決策欄在 §8。
+> 狀態：**G1 + G3 已實作**（2026-08-16，`worker/src/glossary.ts`）；G2（儀表板編輯 + 一鍵提升）未做。
 > 起因：2026-08-13 合併 kvsplayer 後盤點發現 glossary 是「兩套制度並存 + 一個缺口」。
+> 實作與本文的差異記在 §7.1，決策欄在 §8。
 
 ---
 
@@ -35,11 +36,20 @@
 - merge 規則：term 正規化（大小寫/全半形）後比對，上層贏；合併總量設上限（~80 條，超過先砍 ③ 的低頻詞）— 每 chunk 都付 prompt token，表不能無限長
 - 現有 `watch-ko.json` 拆遷：40 條 → `genre-ko.json`、19 條 → 對應節目的 `channel-{key}.json`
 
-### channel key 的現實問題
+### channel key 的現實問題（已解，但兩種鍵值要並存）
 
-`source.json` 的 meta 只有 **channel 名稱字串**（ext 未抓 channelId/ucid）。名稱可改、可重複，
-但自用場景可接受：**先用名稱 slug 當 key**（`channel-トバログ.json`），ext 補抓 ucid 列入 §7 G3。
-video 路由（admin 貼連結）沒有 channel meta → 只吃 ②，channel 表由人工在表單指定（G2 加欄位）。
+原本 `source.json` 的 meta 只有 **channel 名稱字串**。名稱可改、可重複 —— G3（= future-ideas F4）
+已讓 ext 補抓 `videoDetails.channelId`（`UC…`），**新 ingest 一律有 ucid**。
+但舊 source 沒有這欄，所以查找是**兩種鍵值並存、ucid 優先**：
+
+```
+channelKeys(meta) = [ meta.channelId（驗過 /^UC[\w-]{22}$/）, slug(meta.channel) ]
+→ 依序找 glossary/channel-{key}.json，第一個「有內容」的層勝出
+```
+
+頻道改名後 ucid 仍命中；舊資料仍走名稱 slug（`channel-トバログ.json`）。
+video 路由（admin 貼連結）沒有 channel meta → **由送件表單的「頻道鎖定表」欄位指定鍵值**
+（`watch.json` 的 `channel`）；留空就只吃 ②，這正是「A 節目的人名不會塞進 B 節目 prompt」的修法。
 
 ## 4. 資料格式
 
@@ -61,6 +71,7 @@ video 路由（admin 貼連結）沒有 channel meta → 只吃 ②，channel �
 
 | 位置 | 改動 |
 |---|---|
+| `glossary.ts`（新） | 疊層的全部邏輯：`parseGlossaryDoc` / `mergeGlossary` / `channelKeys` / `loadGenreLayer` / `loadChannelLayer` |
 | `jobs.ts` glossaryStep | 讀 ①②（R2 兩個 get，miss 就空表）→ 與 ③ 自動抽合併後寫入 `subs/{id}/glossary.json`（**含層來源標記** `layer: "channel"|"genre"|"auto"`，除錯用） |
 | `jobs.ts` translateStep | 不變（讀合併後的 glossary.json） |
 | `jobs.ts` watchStep | glossary 字串改為 merge(①, ②)（現在只讀單檔） |
@@ -78,11 +89,23 @@ video 路由（admin 貼連結）沒有 channel meta → 只吃 ②，channel �
 
 | 階段 | 內容 | Gate |
 |---|---|---|
-| **G1** | 拆遷 watch-ko.json → genre/channel 兩檔；glossaryStep/watchStep 讀取合併（含優先序與上限）；測試 | 同頻道兩支影片，channel 表術語譯法一致；video 路由 prompt 含合併表 |
-| **G2** | `PUT /glossary/{scope}` + 儀表板編輯 + 「收進頻道表」按鈕；watch-job 表單加 channel 欄 | 從儀表板提升一條 ③ → 下次重翻該頻道影片時生效 |
-| **G3**（選作） | ext 抓 channelId（ucid）穩定鍵值 + 既有 channel 檔改鍵遷移 | 頻道改名不影響鎖定表 |
+| **G1** ✅ | 拆遷 watch-ko.json → genre/channel 兩檔；glossaryStep/watchStep 讀取合併（含優先序與上限）；測試 | 同頻道兩支影片，channel 表術語譯法一致；video 路由 prompt 含合併表 |
+| **G2** | `PUT /glossary/{scope}` + 儀表板編輯 + 「收進頻道表」按鈕 | 從儀表板提升一條 ③ → 下次重翻該頻道影片時生效 |
+| **G3** ✅ | ext 抓 channelId（ucid）穩定鍵值 + 兩種鍵值並存查找 | 頻道改名不影響鎖定表 |
 
 工作量：G1 約半天內、G2 約半天、G3 小。
+
+## 7.1 實作與本文的差異（G1 實際落地時的決定）
+
+| 本文原訂 | 實際做法 | 為什麼 |
+|---|---|---|
+| 40 genre / 19 channel | **44 / 15** | `피디`、`세계관`、`무한도전`、`1박 2일` 是任何韓綜都成立的通用詞／人盡皆知的節目名，歸 genre 才不會綁在單一頻道 |
+| channel 檔鍵值用節目名 | 內建表鍵值取 **`15ya`**（十五夜） | 看片路線要人工在表單打這個鍵值，韓文 slug 不好輸入 |
+| G2 才加 watch-job 的 channel 欄 | **G1 就加**（表單 + API） | 不加的話，拆表當下就會讓既有韓綜掉 15 條人名鎖定 —— 拆表不該造成品質回退 |
+| — | genre 讀取多一層舊檔後備 `glossary/watch-{lang}.json` | R2 上可能還有 kvsplayer 遷入的舊檔，不該因為改名而突然失效 |
+
+另外：`term` 欄位在舊檔是語言碼（`{"ko":"막내","zh":"忙內"}`），parser 兩種都吃；
+壞掉的 glossary 檔一律當「這層沒有」而不是讓整支影片翻譯失敗（人工檔案同樣視為敵意輸入）。
 
 ## 8. 決策（人工填寫）
 

@@ -3,6 +3,7 @@
 
 import type { Cue } from './validate';
 import { segmentCues, type Sentence } from './segment';
+import type { GlossaryEntry } from './glossary';
 import type { LlmFn } from './llm';
 import { CORE_EXTRA, EXTENDED } from './twlexicon';
 import {
@@ -11,16 +12,14 @@ import {
   BANNED_EXCEPTIONS,
   buildGlossaryPrompt,
   buildTranslatePrompt,
+  buildTranslateArrayPrompt,
   buildRepairPrompt,
   type PromptMeta,
   type TranslateChunkInput,
 } from './prompts';
 
-export interface GlossaryEntry {
-  term: string;
-  zh: string; // 呈現形式：「中文（English）」／保留英文／純中文
-  note?: string; // 給非本科觀眾的白話解釋（30 字內）
-}
+// 術語表型別的單一定義在 glossary.ts（疊層合併也在那）；這裡轉出以免既有 import 路徑全改
+export type { GlossaryEntry } from './glossary';
 
 export interface BilingualCue {
   start: number;
@@ -139,6 +138,8 @@ export interface ChunkOutcome {
   byId: Map<number, { zh: string; note?: string }>;
   retries: number;
   problems: string[];
+  echoOff: boolean; // 本 chunk 的每次呼叫模型都沒回 t → 回聲對位在這個 chunk 上是關的
+  echoRejects: number; // 被回聲對位擋下、丟回去重譯的句次 —— F1 到底有沒有在做事，看這個數字
 }
 
 // id 連號檢查（gemini-api-lessons §6：index-keyed batch JSON 要驗 id）—
@@ -156,15 +157,34 @@ function assertIdSanity(arr: unknown[]): void {
   }
 }
 
+// 回聲對位（docs/future-ideas.md F1）：模型回傳的 t 是「它以為自己在翻的那句原文」的開頭。
+// 與我們手上的原文比對 → 「這句譯文對應哪句原文」從此可驗證，而不是靠信任 id。
+// 比對前把空白/標點/全半形正規化掉：模型常吃掉標點或把全形改半形，那不是對錯位。
+const ECHO_LEN = 12;
+const normEcho = (s: string): string => s.normalize('NFKC').toLowerCase().replace(/[\s\p{P}\p{S}]+/gu, '');
+
+export function echoMismatch(orig: string, t: unknown): boolean {
+  if (typeof t !== 'string') return true;
+  const a = normEcho(orig);
+  const b = normEcho(t);
+  if (!b) return true;
+  const n = Math.min(a.length, b.length, ECHO_LEN);
+  if (n < 3) return false; // 太短（單字、擬聲詞）判不出來 — 保守放行，不製造假陽性
+  return a.slice(0, n) !== b.slice(0, n);
+}
+
 function parseChunkOutput(
   raw: string,
   targets: Map<number, string> // id → 原文（fail-fast 檢查用）
-): { byId: Map<number, { zh: string; note?: string }>; rejected: string[] } {
+): { byId: Map<number, { zh: string; note?: string }>; rejected: string[]; echoing: boolean } {
   const arr = cleanJson(raw);
   if (!Array.isArray(arr)) throw new Error('輸出不是 JSON 陣列');
   assertIdSanity(arr);
   const byId = new Map<number, { zh: string; note?: string }>();
   const rejected: string[] = [];
+  // 模型完全不回 t（舊模型／不聽話）→ 退回「只靠 id」的既有行為，別讓整支影片翻不出來；
+  // 只回一部分 → 沒回的那幾句一律丟：半套協定的輸出不值得信任
+  const echoing = arr.some((it) => typeof it?.t === 'string' && it.t.trim().length > 0);
   for (const it of arr) {
     if (
       it &&
@@ -173,6 +193,10 @@ function parseChunkOutput(
       typeof it.zh === 'string' &&
       it.zh.trim().length > 0
     ) {
+      if (echoing && echoMismatch(targets.get(it.id)!, it.t)) {
+        rejected.push(`#${it.id} 回聲對位不符（t=「${String(it.t ?? '').slice(0, 16)}」）`);
+        continue; // 視同缺句 → 進補丁式重試（L1 很便宜）
+      }
       const zh = it.zh.trim();
       const reason = sanityCheckItem(targets.get(it.id)!, zh);
       if (reason) {
@@ -196,7 +220,7 @@ function parseChunkOutput(
       }
     }
   }
-  return { byId, rejected };
+  return { byId, rejected, echoing };
 }
 
 // Phase 2.5 — 英文 ASR 修稿一個 chunk（缺句/解析失敗重試一次，仍缺的句子保留原文）
@@ -234,13 +258,45 @@ export async function repairChunk(
   return { byId, retries };
 }
 
+// F2：位置對齊協定的解析（docs/future-ideas.md F2）。驗證比 id 版更硬也更好驗 ——
+// 長度不符就整包丟棄（模型少一句、多一句、把兩句合併，全都會被這一行擋下來）
+function parseArrayOutput(
+  raw: string,
+  targets: Sentence[]
+): { byId: Map<number, { zh: string; note?: string }>; rejected: string[] } {
+  const arr = cleanJson(raw);
+  if (!Array.isArray(arr)) throw new Error('輸出不是 JSON 陣列');
+  if (arr.length !== targets.length) {
+    throw new Error(`位置對齊：預期 ${targets.length} 句、得到 ${arr.length} 句 — 整包丟棄`);
+  }
+  const byId = new Map<number, { zh: string; note?: string }>();
+  const rejected: string[] = [];
+  for (let i = 0; i < targets.length; i++) {
+    const zh = typeof arr[i] === 'string' ? (arr[i] as string).trim() : '';
+    if (!zh) {
+      rejected.push(`#${targets[i].id} 空譯文`);
+      continue;
+    }
+    const reason = sanityCheckItem(targets[i].text, zh);
+    if (reason) {
+      rejected.push(`#${targets[i].id} ${reason}`);
+      continue;
+    }
+    byId.set(targets[i].id, { zh, note: undefined });
+  }
+  return { byId, rejected };
+}
+
+export type TranslateProtocol = 'id' | 'array';
+
 export async function translateChunk(
   llm: LlmFn,
   meta: PromptMeta,
   glossary: GlossaryEntry[],
   chunk: TranslateChunkInput,
   sourceLang = 'en',
-  depth = 0
+  depth = 0,
+  protocol: TranslateProtocol = 'id'
 ): Promise<ChunkOutcome> {
   const targets = new Map(chunk.target.map((s) => [s.id, s.text]));
   const expected = targets.size;
@@ -266,15 +322,25 @@ export async function translateChunk(
     };
   };
 
+  // 位置對齊協定本身就是對位保證（沒有 id 可滑），所以不需要也不會有回聲欄位
+  let echoSeen = protocol === 'array';
+  let echoRejects = 0;
   const runOnce = async (
     input: TranslateChunkInput,
     hint?: string
   ): Promise<{ accepted: number; rejected: string[] }> => {
-    const want = new Map(input.target.map((s) => [s.id, s.text]));
-    const { byId: parsed, rejected } = parseChunkOutput(
-      await llm(buildTranslatePrompt(meta, glossary, input, hint, sourceLang)),
-      want
+    const raw = await llm(
+      protocol === 'array'
+        ? buildTranslateArrayPrompt(meta, glossary, input, hint, sourceLang)
+        : buildTranslatePrompt(meta, glossary, input, hint, sourceLang)
     );
+    const want = new Map(input.target.map((s) => [s.id, s.text]));
+    const { byId: parsed, rejected, echoing } =
+      protocol === 'array'
+        ? { ...parseArrayOutput(raw, input.target), echoing: true }
+        : parseChunkOutput(raw, want);
+    if (echoing) echoSeen = true;
+    echoRejects += rejected.filter((r) => r.includes('回聲對位不符')).length;
     let accepted = 0;
     for (const [id, v] of parsed) {
       if (!byId.has(id)) accepted++;
@@ -312,8 +378,12 @@ export async function translateChunk(
     }
   }
 
-  // 仍缺句且量大：切半分治一次（對付輸出截斷與單點毒句 — 整包重打救不了這兩種）
-  if (byId.size < expected && depth === 0 && chunk.target.length > 10) {
+  // 仍缺句且量大：切半分治（對付輸出截斷與單點毒句 — 整包重打救不了這兩種）。
+  // 位置對齊協定多切一層、門檻也放寬：它無法部分成功（長度不符整包丟），
+  // 只切一次的話一個壞掉的半包就是連續 7 句沒翻 —— 實測 e4a 第 3 輪就是這樣掉了 7 句
+  const maxDepth = protocol === 'array' ? 2 : 1;
+  const minSplit = protocol === 'array' ? 4 : 10;
+  if (byId.size < expected && depth < maxDepth && chunk.target.length > minSplit) {
     const mid = Math.ceil(chunk.target.length / 2);
     const firstHalf: TranslateChunkInput = {
       before: chunk.before,
@@ -326,11 +396,13 @@ export async function translateChunk(
       after: chunk.after,
     };
     const [a, b] = await Promise.all([
-      translateChunk(llm, meta, glossary, firstHalf, sourceLang, 1),
-      translateChunk(llm, meta, glossary, secondHalf, sourceLang, 1),
+      translateChunk(llm, meta, glossary, firstHalf, sourceLang, depth + 1, protocol),
+      translateChunk(llm, meta, glossary, secondHalf, sourceLang, depth + 1, protocol),
     ]);
     retries += a.retries + b.retries + 1;
     problems.push(...a.problems, ...b.problems);
+    if (!a.echoOff || !b.echoOff) echoSeen = true;
+    echoRejects += a.echoRejects + b.echoRejects;
     for (const m of [a.byId, b.byId]) {
       for (const [id, v] of m) if (!byId.has(id)) byId.set(id, v);
     }
@@ -358,6 +430,7 @@ export async function translateChunk(
     try {
       const ids = offenders.map(([id]) => id);
       const want = new Map(ids.map((id) => [id, targets.get(id)!]));
+      // 回聲對位在這裡同樣生效：對不上的句子不會被採用，等於維持原來那句（髒但對位）
       const { byId: again } = parseChunkOutput(
         await llm(
           buildTranslatePrompt(meta, glossary, subChunk(ids), `上一次譯文出現禁用的中國用語：${hits.join('、')}。全部改為台灣慣用詞。`, sourceLang)
@@ -372,7 +445,7 @@ export async function translateChunk(
     }
   }
 
-  return { byId, retries, problems };
+  return { byId, retries, problems, echoOff: !echoSeen, echoRejects };
 }
 
 // --- 組裝 ---

@@ -82,6 +82,46 @@ describe('runPipeline（in-process 整合）', () => {
     expect(r2.body).toMatchObject({ ok: true, cached: true });
   });
 
+  // G1（docs/glossary-layers.md）：人工養的 channel/genre 表壓過當片自動抽的，
+  // 而且要在 translate prompt 裡真的看得到 —— 「同頻道跨影片譯法不一致」修的就是這個
+  it('glossary 疊層：channel 表壓過自動抽，且進了翻譯 prompt', async () => {
+    const SUBS = new FakeR2();
+    const src = makeSource();
+    src.meta = { ...src.meta, channelId: 'UCabcdefghijklmnopqrstuv' } as typeof src.meta;
+    await SUBS.put('subs/ksfm6jeTg3Q/source.json', JSON.stringify(src));
+    await SUBS.put(
+      'glossary/channel-UCabcdefghijklmnopqrstuv.json',
+      JSON.stringify({ channel: 'Claude', entries: [{ term: 'agents', zh: '代理程式（Agent）' }] })
+    );
+    await SUBS.put('glossary/genre-en.json', JSON.stringify([{ term: 'inference', zh: '推論（Inference）' }]));
+
+    const prompts: string[] = [];
+    const spyLlm = async (p: string) => {
+      prompts.push(p);
+      return fakeLlm(p);
+    };
+    const r = await runPipeline(envOf(SUBS), 'ksfm6jeTg3Q', false, spyLlm);
+    expect(r.status).toBe(200);
+
+    const g = readJson(SUBS, 'subs/ksfm6jeTg3Q/glossary.json');
+    expect(g.layers).toMatchObject({ channelKey: 'UCabcdefghijklmnopqrstuv', channel: 1, genre: 1, auto: 1, merged: 2 });
+    // 自動抽的 agents→「Agent」被 channel 表的譯法取代（同 term 上層贏）
+    expect(g.glossary).toEqual([
+      { term: 'agents', zh: '代理程式（Agent）', layer: 'channel' },
+      { term: 'inference', zh: '推論（Inference）', layer: 'genre' },
+    ]);
+    expect(prompts.some((p) => p.includes('資深字幕譯者') && p.includes('agents → 代理程式（Agent）'))).toBe(true);
+  });
+
+  it('沒有 channelId 的舊 source：退回頻道名稱 slug 當鍵值', async () => {
+    const SUBS = new FakeR2();
+    await SUBS.put('subs/ksfm6jeTg3Q/source.json', JSON.stringify(makeSource())); // meta.channel = 'Claude'
+    await SUBS.put('glossary/channel-claude.json', JSON.stringify([{ term: 'agents', zh: '代理程式' }]));
+    const r = await runPipeline(envOf(SUBS), 'ksfm6jeTg3Q', false, fakeLlm);
+    expect(r.status).toBe(200);
+    expect(readJson(SUBS, 'subs/ksfm6jeTg3Q/glossary.json').layers.channelKey).toBe('claude');
+  });
+
   it('翻譯持續缺句 → fallback 原文 + warnings 非空（驗收會擋）', async () => {
     const SUBS = new FakeR2();
     await SUBS.put('subs/ksfm6jeTg3Q/source.json', JSON.stringify(makeSource()));

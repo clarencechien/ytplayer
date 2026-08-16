@@ -739,6 +739,8 @@ export function adminPage(): string {
   <input id="dur" type="number" min="1" placeholder="例：72（留空 = countTokens 自動探測 + 開放式掃描）">
   <label>原文語言（預設 ko）</label>
   <input id="lang" placeholder="ko">
+  <label>頻道鎖定表（選填）— glossary/channel-{鍵值}.json，人名與節目專名照表翻</label>
+  <input id="chan" placeholder="例：15ya（內建的十五夜譯名表）；留空 = 只吃 genre 通用表">
   <button id="go">開始看片</button>
   <div id="out"></div>
 </main>
@@ -823,6 +825,8 @@ document.getElementById("go").onclick = function () {
   if (dur > 0) body.durationMin = dur;
   var lang = document.getElementById("lang").value.trim();
   if (lang) body.lang = lang;
+  var chan = document.getElementById("chan").value.trim();
+  if (chan) body.channel = chan;
   out.textContent = "送出中…";
   fetch("/watch-job/" + id, { method: "POST", headers: headers(), body: JSON.stringify(body) })
     .then(function (r) { return r.json().then(function (j) { return { s: r.status, j: j }; }); })
