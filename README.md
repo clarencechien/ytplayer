@@ -60,11 +60,15 @@ Caption track 有四個層級，每層是不同的題目（詳見 [docs/handoff-
   [docs/asr-language-experiment.md](docs/asr-language-experiment.md) §4.2
 - **隱私**：全站 noindex（含 robots.txt 不 Disallow 的陷阱解法）；清單 key-gate；
   `/watch` 公開可分享（已接受的殘餘風險記錄在 [docs/migration.md](docs/migration.md) §5）
+- **glossary 疊層**：channel 鎖定表 > genre 通用表 > 當片自動抽，同 term 上層贏、合併上限 80 條；
+  兩條路由同源（text 吃三層、video 吃前兩層）。實測人工表對模型有實際約束力
+  （鎖定譯法 0/7 → 6/7 句，見 [docs/exp-2026-08-16.md](docs/exp-2026-08-16.md) E2）
+- **對位防線**：翻譯輸出帶回聲欄位 `t`（原文前 12 字），對不上就丟回重譯 ——
+  實測抓到模型「整段位移一格」的真實案例
 
-prompt 目前 **v5**（翻譯輸出帶回聲對位欄位）；worker 測試 **130 個**。品質防線與所有實證教訓見
+prompt 目前 **v5**；worker 測試 **131 個**。品質防線與所有實證教訓見
 **[docs/lessons-learned.md](docs/lessons-learned.md)**；合併決策材料見
 [docs/kvsplayer-merge-todo.md](docs/kvsplayer-merge-todo.md)。
-glossary 目前 text 路由 by video 自動抽、video 路由 by language 靜態表（疊層方案見 backlog）。
 
 ### Player 操作（與 YouTube 慣例一致）
 
@@ -80,31 +84,51 @@ glossary 目前 text 路由 by video 自動抽、video 路由 by language 靜態
 手機（iPhone/Android）自動進 RWD 模式：直向字幕在影片下方、橫向最大化時字幕疊回畫面。
 video 路由的影片另有**字卡層**（🃏 疊畫面上緣、逐句稿有標記），與對白字幕分層顯示。
 
-## Backlog（未實作 — 接手先看這裡）
+## 還剩什麼沒做（接手先看這裡）
 
-每項都有寫好的計畫文件與**留白的決策欄**；動工前先填決策欄（本專案工作風格：先計劃再動手）。
+日常使用該有的功能都齊了。以下依「要寫程式 / 要你動手 / 隨時可開 / 決定不做」分四類。
 
-> **2026-08-14/16 已完成並移出 backlog**：畫質 A 案（劇場模式 T 鍵 + 畫質顯示）、
-> 成本優化 L1+L2（單片 -51%）、PWA 手機送片、M5 kvsplayer 關閉（合併結案）、
-> **glossary 疊層 G1 + future ideas F1–F4 全數落地**（見下方「已上線」）。
+### A. 還沒寫的程式（都有計畫文件，動工前先填決策欄）
 
-| 項目 | 計畫 | 規模 | 現況／前提 |
+| 項目 | 計畫 | 規模 | 為什麼還沒做 |
 |---|---|---|---|
-| **播放畫質 B 案** | [video-quality.md](docs/video-quality.md) | 1 天 | A 案（劇場模式）已上線、只解尺寸門檻。要 4K／Premium 畫質只剩 **B 案：ext 在 youtube.com 原生頁疊字幕**（僅桌機、兩套渲染要並存）|
-| **Glossary G2** | [glossary-layers.md](docs/glossary-layers.md) | 半天 | G1 已上線（疊層合併）；G2 = 儀表板編輯 + 「把自動抽的好譯法一鍵收進頻道表」|
-| **大量補翻舊片** | [exp-2026-08-16.md](docs/exp-2026-08-16.md) E4 | 看片量 | 工具已備妥：lite + `TRANSLATE_PROTOCOL=array CHUNK_SIZE=15` = 一片 NT$0.89（vs 預設 NT$6.08），品質可接受、失敗看得見 |
+| **播放畫質 B 案** | [video-quality.md](docs/video-quality.md) | 1 天 | A 案（劇場模式）已解尺寸門檻。要 4K／Premium 只剩「ext 在 youtube.com 原生頁疊字幕」——僅桌機、且要**兩套渲染並存**，維護成本高 |
+| **Glossary G2 養表流程** | [glossary-layers.md](docs/glossary-layers.md) §6 | 半天 | 儀表板編輯 + 「把自動抽的好譯法一鍵收進頻道表」。E2 已證明頻道表對模型真的有約束力（0/7 → 6/7 句），所以這筆投資現在有回報 |
+| **子句邊界漂移** | 只有方向，還沒有計畫 | 大 | F1 實測證實回聲對位管不到它。可能的方向是「翻譯前先把 ASR 碎片合併成完整句、翻完再按詞級時間切回 cue」—— 比回聲對位大得多的改動，先觀察它到底多礙眼再說 |
 
-**2026-08-16 已上線（依相依順序 F4 → G1 → F1 → F3 → F2）**
+### B. 程式做完了、等你動手驗收（都是 5 分鐘內的事）
 
-| | 內容 | 實測 |
+| 驗什麼 | 怎麼驗 | 為什麼沒自動驗 |
 |---|---|---|
-| **G1 glossary 疊層** | channel > genre > 自動抽，同 term 上層贏、上限 80 條；兩條路由同源 | 譯法能跨影片沉澱；video 路由不再把 A 節目人名塞進 B 節目 |
-| **F4 ext ucid** | `videoDetails.channelId` → channel key（名稱 slug 後備）| 頻道改名不影響鎖定表 |
-| **F1 回聲對位** | 譯文帶 `t`（原文前 12 字），對不上就丟回重譯（prompt v5）| **抓到真實的整段位移**；但**不會**改善子句邊界漂移，成本 +14% |
-| **F3 重評 SOP** | [model-reeval-sop.md](docs/model-reeval-sop.md) + `ab-runner --repeat N` 變異表 | 「先量自然變異」變成工具預設行為 |
-| **F2 位置對齊協定** | `TRANSLATE_PROTOCOL=array`（**預設關閉，未驗證**）| — |
+| **ext 抓 ucid**（F4）| `chrome://extensions` 重新載入 ext → 送一支片 → 看 `/subs/{id}/source.json` 有沒有 `meta.channelId` | 容器內連不到 YouTube（429／connection reset）—— 與「不做伺服器抓字幕」是同一道牆 |
+| **PWA 手機送片** | 手機開站台 → 加到主畫面 → 用 YouTube 分享或貼連結 → 桌機 popup 看待補佇列 | 需要真手機 |
+| **劇場模式畫質**（畫質 A 案）| player 頁按 `T` → 看畫質標示有沒有升上去 | 需要真螢幕與真播放器 |
+| **G1 跨影片一致性** | 送同一個頻道的第二支片，看 `glossary.json` 的 `layers.channelKey` 是否命中同一張表 | 手上沒有同頻道的第二支已 ingest 影片 |
 
-已剔除：~~Firefox Android ext 移植~~ — 手機路線已由 PWA + 桌機補收覆蓋，不值得養第二個瀏覽器擴充。
+### C. 隨時可開、按需啟動的工具（不是待辦）
+
+- **大量補翻舊片**：`TRANSLATE_PROTOCOL=array CHUNK_SIZE=15` + `gemini-3.5-flash-lite`
+  = 一片 NT$0.89（預設 flash 是 NT$6.08），品質可接受、失敗看得見（[exp-2026-08-16.md](docs/exp-2026-08-16.md) E4）
+- **模型／協定重評**：`ab-runner --repeat 3` + [model-reeval-sop.md](docs/model-reeval-sop.md)，一輪約 NT$35
+
+### D. 決定不做／已結案（別重新發明）
+
+- ~~Firefox Android ext 移植~~：手機路線已由 PWA + 桌機補收覆蓋
+- ~~伺服器端抓字幕~~：POT + datacenter IP 封鎖（這次補測又撞到一次：HTTP 429）
+- ~~3.6-flash~~：2026-08-16 重評，維持禁用（慢 4.5 倍、tokens +34%、未譯更多）
+- ~~lite 縮 chunk~~：否決；換協定才有救（已驗證，見 C）
+- **日文 F1 攔截率**是常態還是雜訊：不另外花錢測（要 NT$140），
+  production 每支片的 hints 都會記 `echoRejects` 與未譯數，下幾支日文片自己會回答
+
+### 2026-08-16 這批做完的（依相依順序 F4 → G1 → F1 → F3 → F2）
+
+| | 內容 | 實測結果 |
+|---|---|---|
+| **F4 ext ucid** | `videoDetails.channelId` → channel key（名稱 slug 後備）| 頻道改名不影響鎖定表；真實抓取待 B 類驗收 |
+| **G1 glossary 疊層** | channel > genre > 自動抽，上層贏、上限 80 條；兩條路由同源 | 鎖定譯法 0/7 → **6/7 句**；video 路由不再把 A 節目人名塞進 B 節目 |
+| **F1 回聲對位** | 譯文帶 `t`（原文前 12 字），對不上就丟回重譯（prompt v5）| **抓到真實的整段位移**；但**不會**改善子句邊界漂移，成本 +14% |
+| **F3 重評 SOP** | [model-reeval-sop.md](docs/model-reeval-sop.md) + `ab-runner --repeat N` 變異表 | 「先量自然變異」變成工具預設行為；已用它跑完 3.6 與 lite 兩組重評 |
+| **F2 位置對齊協定** | `TRANSLATE_PROTOCOL=array`（**預設關閉**）| 假說成立：重試 -85%、成本 -85%；預設仍用 flash（品質優先）|
 
 ## Repo 結構與文件
 
