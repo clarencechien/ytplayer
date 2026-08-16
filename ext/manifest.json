@@ -3,20 +3,40 @@
   "name": "ytplayer ingest",
   "version": "0.1.0",
   "description": "抓取 YouTube caption track 送到自用雙語字幕 pipeline（load unpacked 自用）",
-  "action": { "default_popup": "popup.html" },
-  "permissions": ["storage"],
-  "host_permissions": ["*://*.youtube.com/*"],
+  "action": {
+    "default_popup": "popup.html"
+  },
+  "permissions": [
+    "storage",
+    "alarms"
+  ],
+  "host_permissions": [
+    "*://*.youtube.com/*",
+    "https://ytplayer.ai-apps.work/*"
+  ],
   "content_scripts": [
     {
-      "matches": ["*://*.youtube.com/*"],
-      "js": ["intercept.js"],
+      "matches": [
+        "*://*.youtube.com/*"
+      ],
+      "js": [
+        "intercept.js"
+      ],
       "run_at": "document_start",
       "world": "MAIN"
     },
     {
-      "matches": ["*://*.youtube.com/*"],
-      "js": ["bridge.js"],
+      "matches": [
+        "*://*.youtube.com/*"
+      ],
+      "js": [
+        "bridge.js"
+      ],
       "run_at": "document_start"
     }
-  ]
+  ],
+  "background": {
+    "service_worker": "background.js",
+    "type": "module"
+  }
 }

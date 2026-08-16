@@ -81,6 +81,12 @@ const STYLE = `
   body[data-mode="en"] #subZh { display: none; }
   body.notes-off #subNote, body.notes-off .row .note { display: none; }
   .stage:fullscreen { background: #000; }
+  /* 劇場模式：收起逐句稿，影片區吃滿視窗寬 — YouTube 依「播放器渲染尺寸」選畫質
+     （720p 需 ~1280x720、1080p 需 ~1920x1080），窄版面會被鎖在低畫質。
+     見 docs/video-quality.md */
+  body.theater aside { display: none; }
+  body.theater .stage { flex: 1; }
+  #quality { font-variant-numeric: tabular-nums; }
 
   /* transcript */
   aside {
@@ -182,6 +188,10 @@ export function watchPage(videoId: string): string {
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="robots" content="noindex">
+<link rel="manifest" href="/manifest.webmanifest">
+<meta name="theme-color" content="#0f1115">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<link rel="apple-touch-icon" href="/icon-192.png">
 <title>ytplayer</title>
 <style>${STYLE}</style>
 </head>
@@ -190,6 +200,7 @@ export function watchPage(videoId: string): string {
   <a id="backBtn" href="/" title="回影片清單">←</a>
   <h1 id="title">載入中…</h1>
   <span class="meta" id="meta"></span>
+  <span class="meta" id="quality" title="YouTube 目前實際輸出的畫質（依播放器尺寸自動選）"></span>
   <div class="controls">
     <button id="btnMode" title="快捷鍵 C：開/關字幕">字幕：雙語</button>
     <button id="btnNotes" class="on">譯註：開</button>
@@ -199,6 +210,7 @@ export function watchPage(videoId: string): string {
     <button id="btnAlpha" title="字幕底色/文字整體透明度">透明度：100%</button>
     <button id="btnSpeed" title="快捷鍵 Shift+&lt; / Shift+&gt;">速度：1x</button>
     <button id="btnLock" title="開放：可直接操作 YouTube 原生介面（畫質等）；期間點影片後熱鍵可能失效，鎖回即恢復">YT 介面：鎖定</button>
+    <button id="btnTheater" title="快捷鍵 T：收起逐句稿讓畫面變大（畫質會跟著提升）">劇場模式</button>
     <button id="btnFull">⛶ 全螢幕</button>
     <button id="btnHelp" title="操作說明與快捷鍵">？</button>
   </div>
@@ -254,7 +266,7 @@ var OFF = 3, ALPHAS = [1, 0.75, 0.5, 0.25], SPEEDS = [0.75, 1, 1.25, 1.5, 1.75, 
 // mobile 偵測：touch 為主、UA 為輔
 var MOBILE = (window.matchMedia && matchMedia("(pointer: coarse)").matches) ||
   /iPhone|iPad|Android/i.test(navigator.userAgent);
-var S = { mode: 0, notes: true, follow: !MOBILE, scale: 1, alpha: 0, speed: 1 };
+var S = { mode: 0, notes: true, follow: !MOBILE, scale: 1, alpha: 0, speed: 1, theater: false };
 var prevMode = 0; // C 鍵切回「無」之前的模式
 try { Object.assign(S, JSON.parse(localStorage.getItem("ytplayer-settings") || "{}")); } catch (e) {}
 var cues = [], rows = [], cur = -1, cardCues = [], cardKey = "";
@@ -274,12 +286,32 @@ function applySettings() {
   document.documentElement.style.setProperty("--band-alpha", ALPHAS[S.alpha] || 1);
   document.getElementById("btnAlpha").textContent = "透明度：" + Math.round((ALPHAS[S.alpha] || 1) * 100) + "%";
   document.getElementById("btnSpeed").textContent = "速度：" + (SPEEDS[S.speed] || 1) + "x";
+  document.body.classList.toggle("theater", !!S.theater);
+  document.getElementById("btnTheater").classList.toggle("on", !!S.theater);
   if (yt && yt.setPlaybackRate) yt.setPlaybackRate(SPEEDS[S.speed] || 1);
+  setTimeout(showQuality, 1200); // 版面變動後 ABR 需要一點時間換檔
+}
+
+// 畫質顯示：YouTube 不讓程式「指定」畫質（setPlaybackQuality 已失效），但讀得到目前值。
+// 顯示出來才能驗證「畫面變大 → 畫質變好」有沒有真的發生（docs/video-quality.md §2）
+var QLABEL = { tiny: "144p", small: "240p", medium: "360p", large: "480p", hd720: "720p", hd1080: "1080p", hd1440: "1440p", hd2160: "4K", highres: "高解析" };
+function showQuality() {
+  var el = document.getElementById("quality");
+  if (!el || !yt || !yt.getPlaybackQuality) return;
+  var q = yt.getPlaybackQuality();
+  if (!q || q === "unknown") { el.textContent = ""; return; }
+  var box = document.getElementById("player").getBoundingClientRect();
+  var dpr = window.devicePixelRatio || 1;
+  el.textContent = "・🖥 " + (QLABEL[q] || q);
+  el.title = "YouTube 目前輸出 " + (QLABEL[q] || q) +
+    "（播放器 " + Math.round(box.width) + "×" + Math.round(box.height) +
+    " CSS px、DPR " + dpr + "）。畫質由 YouTube 依播放器尺寸自動決定 — 按 T 或全螢幕把畫面變大就可能提升。";
 }
 document.getElementById("btnMode").onclick = function () { S.mode = (S.mode + 1) % MODES.length; save(); applySettings(); };
 document.getElementById("btnAlpha").onclick = function () { S.alpha = (S.alpha + 1) % ALPHAS.length; save(); applySettings(); };
 document.getElementById("btnSpeed").onclick = function () { S.speed = (S.speed + 1) % SPEEDS.length; save(); applySettings(); };
 function stepSpeed(d) { S.speed = Math.min(SPEEDS.length - 1, Math.max(0, S.speed + d)); save(); applySettings(); }
+document.getElementById("btnTheater").onclick = function () { S.theater = !S.theater; save(); applySettings(); };
 document.getElementById("btnNotes").onclick = function () { S.notes = !S.notes; save(); applySettings(); };
 document.getElementById("btnFollow").onclick = function () { S.follow = !S.follow; save(); applySettings(); };
 document.getElementById("btnSmaller").onclick = function () { S.scale = Math.max(0.7, +(S.scale - 0.1).toFixed(2)); save(); applySettings(); };
@@ -288,6 +320,7 @@ function toggleFull() {
   var st = document.getElementById("stage");
   if (document.fullscreenElement) document.exitFullscreen(); else st.requestFullscreen();
 }
+document.addEventListener("fullscreenchange", function () { setTimeout(showQuality, 1500); });
 document.getElementById("btnFull").onclick = toggleFull;
 
 // 我們的字幕層就是 CC — 原生 CC 一律關（ingest 時開的 CC 是帳號黏性設定，embed 會繼承）。
@@ -342,6 +375,8 @@ document.addEventListener("keydown", function (e) {
   } else if (k === "arrowright") {
     e.preventDefault();
     seekBy(5);
+  } else if (k === "t") {
+    S.theater = !S.theater; save(); applySettings();
   } else if (k === "f") {
     toggleFull();
   } else if (e.key === "<") {
@@ -505,8 +540,10 @@ function tickCards(t) {
   });
 }
 
+var qTick = 0;
 function tick() {
   if (!yt || !yt.getCurrentTime) return;
+  if (++qTick % 33 === 0) showQuality(); // 150ms × 33 ≈ 每 5 秒更新一次畫質顯示
   var t = yt.getCurrentTime();
   tickCards(t);
   var idx = findCue(t);
@@ -535,6 +572,11 @@ export function indexPage(): string {
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="robots" content="noindex">
+<link rel="manifest" href="/manifest.webmanifest">
+<meta name="theme-color" content="#0f1115">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<link rel="apple-touch-icon" href="/icon-192.png">
 <title>ytplayer — 影片清單</title>
 <style>${STYLE}
   #videos { max-width: 720px; margin: 0 auto; width: 100%; overflow-y: auto; padding: 8px 0; }
@@ -546,8 +588,15 @@ export function indexPage(): string {
 </style>
 </head>
 <body>
-<header><h1>ytplayer — 中英雙語字幕</h1><span class="meta">自用 dogfood・Tier 2 自動翻譯</span></header>
-<main><div id="videos"><div class="msg">載入中…</div></div></main>
+<header>
+  <h1>ytplayer — 雙語字幕</h1>
+  <span class="meta">自用</span>
+  <a href="/share" class="meta" style="margin-left:auto;color:var(--en)">＋ 送片</a>
+</header>
+<main>
+  <div id="inbox"></div>
+  <div id="videos"><div class="msg">載入中…</div></div>
+</main>
 <script>
 // 清單需要 key（等於觀看紀錄）。首次用 /?key=XXX 進來即存進 localStorage 並清掉網址，
 // 之後直接開 / 就好；key 不進網址列歷史。單片 /watch/{id} 仍公開、可分享
@@ -569,6 +618,38 @@ function askKey(msg) {
     location.reload();
   };
 }
+
+function esc(v) { var d = document.createElement("span"); d.textContent = String(v == null ? "" : v); return d.innerHTML; }
+
+// PWA：註冊極簡 service worker 取得可安裝資格（不快取，見 docs/pwa-plan.md §4.2）
+if ("serviceWorker" in navigator) navigator.serviceWorker.register("/sw.js").catch(function () {});
+
+// 待補字幕佇列（手機送進來的片，等桌機 ext 補收）
+function loadInbox() {
+  if (!savedKey) return;
+  fetch("/inbox.json", { headers: { "x-ingest-key": savedKey } })
+    .then(function (r) { return r.ok ? r.json() : null; })
+    .then(function (d) {
+      var box = document.getElementById("inbox");
+      if (!d || !d.count) { box.innerHTML = ""; return; }
+      box.innerHTML = '<div class="msg" style="color:var(--accent)">📥 待補字幕 ' + d.count +
+        ' 支 — 桌機開 Chrome 時，擴充功能圖示會顯示數量，點一下即可補收</div>' +
+        d.items.map(function (it) {
+          return '<div class="vrow pending"><div class="title">' + esc(it.title || it.videoId) + '</div>' +
+            '<div class="sub">' + it.videoId + '・' + (it.requestedAt || "").slice(0, 16).replace("T", " ") +
+            '・<a href="https://www.youtube.com/watch?v=' + it.videoId + '" target="_blank" style="color:var(--en)">YouTube</a>' +
+            '・<a href="#" data-del="' + it.videoId + '" style="color:var(--dim)">移除</a></div></div>';
+        }).join("");
+      box.querySelectorAll("[data-del]").forEach(function (a) {
+        a.onclick = function (e) {
+          e.preventDefault();
+          fetch("/inbox/" + a.dataset.del, { method: "DELETE", headers: { "x-ingest-key": savedKey } }).then(loadInbox);
+        };
+      });
+    })
+    .catch(function () {});
+}
+loadInbox();
 
 fetch("/videos.json", { headers: savedKey ? { "x-ingest-key": savedKey } : {} }).then(function (r) {
   if (r.status === 403) { askKey("影片清單需要金鑰（單片播放連結不需要）。"); return null; }
@@ -751,6 +832,110 @@ document.getElementById("go").onclick = function () {
       setTimeout(refresh, 3000);
     })
     .catch(function (e) { out.innerHTML = '<span class="err">' + e + "</span>"; });
+};
+</script>
+</body>
+</html>`;
+}
+
+// /share — PWA share target 落點（Android）＋ iOS 的貼上框退路（docs/pwa-plan.md §4.3）。
+// 手機沒有 ext（攔截不了字幕），所以這裡只把影片排進「待補字幕」佇列，
+// 桌機開 Chrome 時由 ext popup 提醒補收；急件才走看片模式（貴 30 倍）。
+export function sharePage(): string {
+  return `<!DOCTYPE html>
+<html lang="zh-Hant-TW">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex">
+<link rel="manifest" href="/manifest.webmanifest">
+<title>ytplayer — 送片</title>
+<style>
+  :root { color-scheme: dark; }
+  body { margin: 0; background: #0f1115; color: #e8eaf0;
+         font: 15px/1.65 system-ui, "Noto Sans TC", sans-serif; }
+  main { max-width: 520px; margin: 0 auto; padding: 28px 18px 60px; }
+  h1 { font-size: 19px; margin-bottom: 6px; }
+  .hint { color: #8b93a5; font-size: 13px; }
+  input { width: 100%; box-sizing: border-box; background: #171a21; color: #e8eaf0;
+          border: 1px solid #262b36; border-radius: 10px; padding: 12px 14px; font-size: 16px; margin-top: 14px; }
+  button { width: 100%; margin-top: 12px; background: #ffd54a; color: #000; border: 0;
+           border-radius: 10px; padding: 13px; font-size: 16px; font-weight: 700; cursor: pointer; }
+  button.ghost { background: #171a21; color: #e8eaf0; border: 1px solid #262b36; font-weight: 500; }
+  #out { margin-top: 18px; font-size: 14px; line-height: 1.7; }
+  .ok { color: #7c5; } .err { color: #f66; }
+  a { color: #9ecbff; }
+</style>
+</head>
+<body>
+<main>
+  <h1>📥 送片給 ytplayer</h1>
+  <p class="hint">手機沒有擴充功能、抓不到字幕，所以這裡先排隊：
+  桌機開 Chrome 時擴充功能會提醒你補收（字幕品質與費用都最好）。</p>
+  <input id="url" placeholder="貼上 YouTube 連結" autocomplete="off" autocapitalize="off">
+  <button id="go">排入待補</button>
+  <button id="goWatch" class="ghost">改用看片模式（立刻有字幕，費用約 30 倍）</button>
+  <div id="out"></div>
+  <p class="hint" style="margin-top:22px">
+    <a href="/">← 影片清單</a>　<a href="/admin">儀表板</a>
+  </p>
+</main>
+<script>
+var out = document.getElementById("out");
+var input = document.getElementById("url");
+// share target（Android）：url 可能落在 url 或 text 參數
+var q = new URLSearchParams(location.search);
+var shared = q.get("url") || q.get("text") || "";
+if (shared) {
+  input.value = shared;
+  history.replaceState(null, "", "/share"); // 連結不留在網址列（noindex 之外的第二層保險）
+}
+function headers() {
+  var h = { "content-type": "application/json" };
+  var key = localStorage.getItem("ytplayer-key");
+  if (key) h["x-ingest-key"] = key;
+  return h;
+}
+function idOf(v) {
+  var m = (v || "").match(/(?:v=|youtu\\.be\\/|shorts\\/|embed\\/)?([A-Za-z0-9_-]{11})(?:[?&#]|$)/);
+  return m ? m[1] : null;
+}
+function post(path, body) {
+  out.textContent = "送出中…";
+  return fetch(path, { method: "POST", headers: headers(), body: JSON.stringify(body || {}) })
+    .then(function (r) { return r.json().then(function (j) { return { s: r.status, j: j }; }); })
+    .then(function (r) {
+      if (r.s === 403) {
+        out.innerHTML = '<span class="err">未授權</span>：請先在這台裝置用 <code>/?key=你的KEY</code> 開一次清單頁（key 會存進瀏覽器）。';
+        return null;
+      }
+      if (!r.j.ok) { out.innerHTML = '<span class="err">' + (r.j.error || ("HTTP " + r.s)) + "</span>"; return null; }
+      return r.j;
+    })
+    .catch(function (e) { out.innerHTML = '<span class="err">' + e + "</span>"; return null; });
+}
+document.getElementById("go").onclick = function () {
+  var id = idOf(input.value);
+  if (!id) { out.innerHTML = '<span class="err">看不懂這個連結</span>'; return; }
+  post("/inbox", { url: input.value, via: shared ? "share" : "paste" }).then(function (j) {
+    if (!j) return;
+    if (j.already === "translated") {
+      out.innerHTML = '<span class="ok">這支已經翻好了。</span><br><a href="/watch/' + id + '">▶ 直接看</a>';
+    } else if (j.already === "ingested") {
+      out.innerHTML = '<span class="ok">已經送過了，翻譯進行中。</span><br><a href="/watch/' + id + '">▶ 到播放頁看進度</a>';
+    } else {
+      out.innerHTML = '<span class="ok">✅ 已排入待補。</span><br>桌機開 Chrome 時，擴充功能圖示會顯示待補數量，點一下就能補收。<br><a href="/watch/' + id + '">▶ 播放頁</a>';
+    }
+  });
+};
+document.getElementById("goWatch").onclick = function () {
+  var id = idOf(input.value);
+  if (!id) { out.innerHTML = '<span class="err">看不懂這個連結</span>'; return; }
+  if (!confirm("看片模式會讓 Gemini 直接看整部影片，費用約為一般翻譯的 30 倍。確定嗎？")) return;
+  post("/watch-job/" + id, {}).then(function (j) {
+    if (!j) return;
+    out.innerHTML = '<span class="ok">🎬 看片任務已受理。</span><br><a href="/watch/' + id + '">▶ 播放頁（翻好前會顯示進度）</a>';
+  });
 };
 </script>
 </body>

@@ -146,7 +146,8 @@ export function buildRepairPrompt(
 - 移除 [music]、[applause] 等雜訊標記
 - 依上下文修正明顯聽錯的詞，特別是人名、公司、產品、術語
 - 標點與大小寫修到正常書寫水準
-- id 原樣對應、一句不缺；沒問題的句子原樣輸出
+- **只輸出你有修改的句子**：完全不需要修改的句子請直接省略，不要回傳
+  （這是為了省輸出成本；被省略的句子我們會沿用原文）
 ${extraHint ? `\n特別注意：${extraHint}\n` : ''}
 上文（僅供參考，不要輸出）：
 ${chunk.before.map((s) => s.text).join('\n') || '（無）'}
@@ -157,6 +158,7 @@ ${chunk.target.map((s) => `${s.id}: ${s.text}`).join('\n')}
 下文（僅供參考，不要輸出）：
 ${chunk.after.map((s) => s.text).join('\n') || '（無）'}
 
-輸出：純 JSON 陣列，無 markdown 圍欄、無說明文字。格式：
+輸出：純 JSON 陣列，無 markdown 圍欄、無說明文字。**只放有修改的句子**，id 依序遞增。
+若全部都不需要修改，輸出空陣列 []。格式：
 [{"id":0,"en":"corrected sentence"}]`;
 }

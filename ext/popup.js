@@ -79,9 +79,39 @@ function renderError(msg) {
   app.innerHTML = `<div class="err">${esc(msg)}</div>`;
 }
 
+// 待補字幕佇列（手機用 /share 送進來的片）：桌機開 popup 時列出，點一下開分頁補收。
+// 刻意不自動開分頁/自動選軌 —— 選哪條軌是人的判斷（docs/pwa-plan.md §4.4）
+async function renderInbox(cfg) {
+  const box = document.getElementById('inbox');
+  if (!box || !cfg.ingestKey) return;
+  try {
+    const res = await fetch(`${cfg.workerUrl}/inbox.json`, { headers: { 'x-ingest-key': cfg.ingestKey } });
+    if (!res.ok) return;
+    const d = await res.json();
+    if (!d.count) { box.innerHTML = ''; return; }
+    box.innerHTML =
+      `<div class="tier tier-2" style="margin-bottom:6px">📥 待補字幕 ${d.count} 支</div>` +
+      d.items
+        .map(
+          (it) =>
+            `<div class="hint" style="margin:4px 0"><a href="#" data-open="${esc(it.videoId)}">▶ ${esc(it.title || it.videoId)}</a></div>`
+        )
+        .join('');
+    box.querySelectorAll('[data-open]').forEach((a) => {
+      a.addEventListener('click', (e) => {
+        e.preventDefault();
+        chrome.tabs.create({ url: `https://www.youtube.com/watch?v=${a.dataset.open}` });
+      });
+    });
+  } catch {
+    /* 網路不通就當沒有待補，不擋主流程 */
+  }
+}
+
 async function main() {
   const cfg = await getConfig();
   setupSettings(cfg);
+  renderInbox(cfg);
   if (!cfg.workerUrl) {
     renderError('請先在下方「設定」填 Worker URL');
     return;
@@ -162,6 +192,7 @@ async function main() {
       const out = await res.json();
       if (!res.ok || !out.ok) throw new Error(out.error ?? (out.errors ?? []).join('; ') ?? `HTTP ${res.status}`);
       const watchUrl = `${cfg.workerUrl}/watch/${state.urlVideoId}`;
+      chrome.runtime.sendMessage({ type: 'refreshInbox' }).catch(() => {}); // 佇列可能剛銷帳
       result.innerHTML = `<span class="ok">✅ 已存入 ${esc(out.key)}（${out.cueCount} cues）</span>` +
         (out.warning ? `<div class="warn">⚠ ${esc(out.warning)}</div>` : '') +
         (out.route !== 'reject'

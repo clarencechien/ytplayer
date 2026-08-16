@@ -29,6 +29,7 @@ import {
   type PipelineStats,
 } from './pipeline';
 import { retimeCues } from './retime';
+import watchGlossaryKo from './data/watch-glossary-ko.json'; // 韓綜譯名表（kvsplayer 移植，看片路線預設）
 import {
   initWatchState,
   nextSegment,
@@ -371,9 +372,15 @@ async function watchStep(env: JobEnv, videoId: string, watchOverride?: WatchLlmF
         meter.tokens += n;
       }
     );
-  // 譯名表（頻道/genre 鎖定，跨片沿用 — kvsplayer 資產，M4 遷移時匯入 R2）
-  const glossaryObj = await env.SUBS.get(`glossary/watch-${(await jsonGet<WatchRequest>(env, `subs/${videoId}/watch.json`))?.lang || 'ko'}.json`);
-  const glossary = glossaryObj ? await glossaryObj.text() : '[]';
+  // 譯名表（跨片沿用的 kvsplayer 資產）：R2 有自訂版就用它，否則用 repo 內建的預設表。
+  // 內建 fallback 讓看片路線不依賴任何一次性的匯入動作（M5 刪掉 migrate.ts 後仍然可用）
+  const lang = (await jsonGet<WatchRequest>(env, `subs/${videoId}/watch.json`))?.lang || 'ko';
+  const glossaryObj = await env.SUBS.get(`glossary/watch-${lang}.json`);
+  const glossary = glossaryObj
+    ? await glossaryObj.text()
+    : lang === 'ko'
+      ? JSON.stringify(watchGlossaryKo)
+      : '[]';
 
   try {
     meter.calls += 1;
@@ -781,11 +788,13 @@ async function assembleStep(env: JobEnv, videoId: string): Promise<StepResult> {
   }
 
   const sentences = sentencesDoc.sentences;
-  const { cues, untranslated, bannedHits, extendedHits } = assembleBilingual(sentences, src.cues, byId);
+  const { cues, untranslated, bannedHits, extendedHits, driftCount } = assembleBilingual(sentences, src.cues, byId);
   retimeCues(cues); // B 治標內建：顯示鏈接 + 最短時長（docs/subtitle-timing.md）
   if (untranslated > 0) warnings.push(`${untranslated} 句翻譯失敗，以原文代替（標 untranslated）`);
   if (bannedHits.length > 0) warnings.push(`禁用詞殘留：${bannedHits.join('、')}`);
   const hints = extendedHits.length > 0 ? [`疑似中國用語（OpenCC 參考，僅提示）：${extendedHits.slice(0, 20).join('、')}`] : [];
+  // 子句邊界漂移：ASR 碎片翻譯的既有現象，僅提示（新舊版都有，見 cost-optimization.md §8）
+  if (driftCount > 0) hints.push(`${driftCount} 句疑似子句邊界漂移（長原文配極短譯文，單句對位可能偏移）`);
   const autoNotes = attachGlossaryNotes(cues, glossaryDoc.glossary);
 
   // schema v2（migration.md §1）：orig 取代 en、kind 標記 speech/card、trust 標記信任等級

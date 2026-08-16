@@ -178,9 +178,16 @@ admin 頁 + Access、genre glossary。
 kvsplayer.ai-apps.work DNS 指向 ytplayer（或加 301 轉址）。
 **Gate**：抽 3 支舊韓綜在 ytplayer 正常播放（含字卡）；舊連結可達。
 
-### M5 — 關閉 kvsplayer
-確認 M4 gate 過後：刪 kvsplayer Worker、kvs-jobs queue；`kvs-krsub` **保留 30 天**再刪（保險）；
-ytpoc repo 封存（README 指向 ytplayer）。lessons-learned / README tier 表 / 兩份決策欄回填收尾。
+### M5 — 關閉 kvsplayer（**2026-08-14 完成，合併結案**）
+
+程式面：移除 KVS 綁定、刪除 `migrate.ts` 與其路由/測試；看片譯名表改為
+「R2 有自訂版就用、否則用 repo 內建 `src/data/watch-glossary-ko.json`」——
+不再依賴任何一次性匯入動作。
+
+人工面（已執行）：kvsplayer Worker 與 `kvs-jobs` queue 已刪除。
+`kvs-krsub` bucket 依保險原則保留 30 天（2026-09 中旬後可刪）；ytpoc repo 封存為選配。
+
+**合併專案至此結案** — 之後的工作都是 ytplayer 自身的演進，不再有跨專案遷移項目。
 
 ## 8. 需要你操作的清單（程式碼做不到的）
 
@@ -191,7 +198,7 @@ ytpoc repo 封存（README 指向 ytplayer）。lessons-learned / README tier �
 | M1 前 | 確認 ytplayer Worker 在 Paid plan 下（Queues 綁定 build 才會過）| Dashboard → Worker → Settings |
 | M3 前 | Cloudflare Access 建 `/admin/*` policy（沿用 kvsplayer 的 email 白名單）| Zero Trust → Access |
 | M4 | kvsplayer.ai-apps.work DNS 改指 ytplayer | DNS |
-| M5 | 刪 kvsplayer Worker + queue；30 天後刪 `kvs-krsub`；封存 ytpoc | Dashboard / GitHub |
+| M5 | ~~刪 kvsplayer Worker + queue~~（**已做**）；30 天後刪 `kvs-krsub`；封存 ytpoc | Dashboard / GitHub |
 | 各階段 | 合併 PR 觸發部署（Workers Builds 跟 production branch）| GitHub |
 
 ## 9. 明確不做 / 已否決
