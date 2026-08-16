@@ -61,9 +61,7 @@ Caption track 有四個層級，每層是不同的題目（詳見 [docs/handoff-
 prompt 目前 **v4**；worker 測試 **97 個**。品質防線與所有實證教訓見
 **[docs/lessons-learned.md](docs/lessons-learned.md)**；合併決策材料見
 [docs/kvsplayer-merge-todo.md](docs/kvsplayer-merge-todo.md)。
-glossary 目前 text 路由 by video 自動抽、video 路由 by language 靜態表 —
-跨影片一致性的疊層方案見 [docs/glossary-layers.md](docs/glossary-layers.md)（計畫，未實作）。
-待辦：M5 關閉 kvsplayer（刪 Worker/queue、30 天後刪舊 bucket、移除 KVS 綁定）。
+glossary 目前 text 路由 by video 自動抽、video 路由 by language 靜態表（疊層方案見 backlog）。
 
 ### Player 操作（與 YouTube 慣例一致）
 
@@ -79,6 +77,26 @@ glossary 目前 text 路由 by video 自動抽、video 路由 by language 靜態
 手機（iPhone/Android）自動進 RWD 模式：直向字幕在影片下方、橫向最大化時字幕疊回畫面。
 video 路由的影片另有**字卡層**（🃏 疊畫面上緣、逐句稿有標記），與對白字幕分層顯示。
 
+## Backlog（未實作 — 接手先看這裡）
+
+每項都有寫好的計畫文件與**留白的決策欄**；動工前先填決策欄（本專案工作風格：先計劃再動手）。
+
+| 項目 | 計畫 | 規模 | 現況／前提 |
+|---|---|---|---|
+| **M5 關閉 kvsplayer** | [migration.md](docs/migration.md) §M5 | 小（多為人工）| 資料已遷完；待刪 Worker/queue、`kvs-krsub` 保留 30 天後刪；程式面要移除 KVS 綁定與 `migrate.ts` |
+| **成本優化（重試效率）** | [cost-optimization.md](docs/cost-optimization.md) | 半天–1 天 | 實測：9 分鐘片 NT$10.87，**六成是重試重吐譯文**。L1 補丁式重試預估 -47%。目前用量下「省錢但不急」；要大量補翻舊片就是前置條件 |
+| **PWA + 手機送片** | [pwa-plan.md](docs/pwa-plan.md) | 1–1.5 天 | 手機分享 → key-gated inbox 佇列 → 桌機 ext badge 提醒補收。**刻意不做伺服器抓字幕**（POT + IP 封鎖）|
+| **Glossary 疊層** | [glossary-layers.md](docs/glossary-layers.md) | G1 半天 | 解「同頻道跨影片譯法不一致」；channel key 目前只能用頻道名 slug（ext 未抓 channelId）|
+
+**Future ideas（還沒有計畫文件，要做先開一份）**
+
+- **lite 級翻譯換協定**：E 組實測否決縮 chunk，病根是 index-keyed 的 id 紀律 → 唯一出路是改成
+  按位置對齊的純陣列輸出（成功則成本再砍 6 倍，見 [model-experiment.md](docs/model-experiment.md)）
+- **3.6-flash 重評**：`assertIdSanity` 已備妥（它當初就是被 id 對滑打回的），但仍須同料 A/B + 抽樣人工比對
+- **3.7-flash**：觀望——沒有 `minimal` 檔位，thinking 稅地板墊高（見 [gemini-api-lessons.md](docs/gemini-api-lessons.md) §1）
+- **ext 抓 channelId（ucid）**：glossary channel key 穩定化，順便讓頻道改名不影響鎖定表
+- **Firefox Android ext 移植**：FF 128+ 已支援 `world: "MAIN"`，是手機直接 ingest 的唯一非灰色路徑
+
 ## Repo 結構與文件
 
 | 路徑 | 內容 |
@@ -91,6 +109,7 @@ video 路由的影片另有**字卡層**（🃏 疊畫面上緣、逐句稿有�
 | [docs/migration.md](docs/migration.md) | **kvsplayer 合併方案與執行紀錄（M0–M5、保險絲設計、隱私）** |
 | [docs/glossary-layers.md](docs/glossary-layers.md) | Glossary 疊層計畫（channel/genre/per-video，未實作） |
 | [docs/pwa-plan.md](docs/pwa-plan.md) | PWA + 手機送片計畫（桌機補收路線，未實作） |
+| [docs/cost-optimization.md](docs/cost-optimization.md) | 成本優化計畫（重試效率，未實作）+ 單片費用解剖 |
 | [docs/subtitle-timing.md](docs/subtitle-timing.md) | 字幕時間軸：病因與修法（A 詞級斷句 + B 顯示鏈接，已實作） |
 | [docs/model-experiment.md](docs/model-experiment.md) | 模型對決四組實測（3.5-flash+關思考勝出）+ 官方牌價外部驗證 |
 | [docs/gemini-api-lessons.md](docs/gemini-api-lessons.md) | **Gemini API 跨專案教訓 v2.4（canonical）**：thinking 稅／模型 A-B 方法論／官方牌價／保險絲四層；kikemu・sukemu・manemu 實測數據已回填 |
