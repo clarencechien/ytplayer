@@ -42,8 +42,11 @@ curl -s -o /dev/null -w '%{http_code}\n' -A 'Googlebot/2.1' https://ytplayer.ai-
 curl -s -o /dev/null -w '%{http_code}\n' -H 'user-agent;' https://ytplayer.ai-apps.work/                    # 403（空 UA）
 ```
 
-## 3. Turnstile challenge（**已實作**，2026-08-17）
+## 3. Turnstile challenge（程式已實作，**目前休眠**）
 
+> 📌 **先看 §3.1**：實際採用的是 WAF 的 UA 型 Managed Challenge，
+> ytplayer 這套 Turnstile 沒設環境變數所以不生效（保留為隨時可啟用的選項）。
+>
 > ⚠ **只加環境變數不會生效**。Turnstile 不是開關，是一段流程：
 > 頁面要渲染 widget、後端要拿 token 去 `siteverify`、通過後要發通行證。
 > 這三段都在 `worker/src/turnstile.ts` 與 `index.ts`。
@@ -103,68 +106,98 @@ curl -s "https://ytplayer.ai-apps.work/?key=你的KEY" | grep -c cf-turnstile # 
 `/subs/*`、所有 API、`/health`、`/robots.txt`、`/manifest.webmanifest`、`/sw.js`、圖示。
 player 頁抓字幕、ext ingest、PWA、本機 ab-runner 都不受影響。
 
-### 二選一：Turnstile（應用層）vs WAF Managed Challenge（邊緣層）
+### Turnstile vs WAF challenge：**要看規則怎麼寫，不是二選一**
 
-**兩條路擇一，不要都開** —— 都開會被問兩次。
+> ⚠ 我一開始說「兩個都開會被問兩次」—— **只有路徑型規則才會**。修正如下：
 
-| | Turnstile（本專案程式） | WAF Managed Challenge |
+| challenge 規則的觸發條件 | 與 app 端 Turnstile 共存？ |
+|---|---|
+| **路徑型**（挑戰所有頁面瀏覽） | ❌ 會問兩次 —— 真人先過 WAF、再過 Turnstile |
+| **UA 型**（UA 含 bot/crawl 才挑戰） | ✅ **不重疊** —— 真人 UA 不含 bot/crawl，WAF 根本不匹配，直接交給 app 自己的 Turnstile |
+
+| | Turnstile（應用層程式） | WAF Managed Challenge（邊緣層） |
 |---|---|---|
 | 設定在哪 | site key 進 `wrangler.jsonc`、secret 存 **Secret 型態** | dashboard 一條規則 |
-| 會不會被部署踩掉 | site key 進 repo 後不會；**明文變數會**（已踩兩次）| **不會**（Zone 層設定，與 Worker 部署無關）|
+| 會不會被部署踩掉 | site key 進 repo 後不會；**明文變數會**（已踩三次）| **不會**（Zone 層，與 Worker 部署無關）|
 | 版本控管 | ✅ 在 git 裡、有 10 個測試 | ❌ 改了沒紀錄 |
-| 精細度 | 知道「自己人（key/Access）」「搜尋引擎」「已通過」 | 只能用路徑與 `cf.client.bot` 表達 |
-| 自己會不會被問 | 帶 `?key=` 或 Access 就**完全不問** | 會問，過一次給 cookie（預設 30 分鐘） |
+| 精細度 | 知道「自己人（key/Access）」「搜尋引擎」「已通過」 | 只能用 UA／路徑／`cf.client.bot` 表達 |
+| 自己會不會被問 | 帶 `?key=` 或 Access 就**完全不問** | 看規則；UA 型的話真人完全不會被問 |
 | 通行期限 | 30 天 | Challenge Passage 設定（預設 30 分鐘） |
+| 涵蓋範圍 | 只有這個 Worker 的頁面 | **整個 zone 的所有主機與路徑** |
 
-**建議**：如果你不想再管 secret，就用 **WAF Managed Challenge** ——
-Turnstile 程式碼沒設定就自動休眠，不會衝突、也不用刪。
-如果你想要「自己人完全不被打擾 + 設定進版控」，就走 Turnstile。
-
-### 2026-08-17 的實際教訓
+### 2026-08-17 的 var-stomping 教訓（第三次）
 
 TURNSTILE_SITE_KEY / TURNSTILE_SECRET 加在 dashboard 的**明文變數**，
 下一次 git 部署就被 `wrangler.jsonc` 的 `vars` 區塊整個蓋掉（`/health` 的
-`turnstileConfigured` 變回 false）。**這就是硬規則 #1**，第三次踩到。
+`turnstileConfigured` 變回 false）。**這就是硬規則 #1**。
 正確做法二選一：site key 寫進 `wrangler.jsonc`（它本來就是公開值），
 或兩個都存成 **Secret 型態**（Secret 不受部署影響）。
 
-## 3.1 Cloudflare WAF challenge（替代方案，dashboard 設定）
+## 3.1 實際採用的方案（2026-08-17 定案，別重新研究）
 
-### 這擋得住什麼、擋不住什麼
+**WAF Managed Challenge + UA 條件**，建在 `ai-apps.work` zone 底下，
+所以 **ytplayer 與三兄弟（kikemu／sukemu／manemu）全部涵蓋**：
 
-| | 有效嗎 |
+```
+(http.user_agent contains "bot" and not cf.client.bot)
+  or (http.user_agent contains "crawl" and not cf.client.bot)
+→ Managed Challenge
+```
+
+`not cf.client.bot` = 放行 Cloudflare **驗證過的**正牌爬蟲（讓它讀到 noindex），
+冒名的 Googlebot 照樣被擋。
+
+**ytplayer 的 Turnstile 程式碼維持休眠**（沒設環境變數 = 自動不生效），
+三兄弟各自的 Turnstile **繼續用**，兩者不衝突（UA 型規則不碰真人）。
+
+### 實測驗證（2026-08-17，不用再測一次）
+
+| 測試 | 結果 | 判讀 |
+|---|---|---|
+| UA 含 `bot`／首頁 | 403 `cf-mitigated: challenge` | WAF 生效 |
+| UA 含 `crawl`／`/subs/*.json` | 403 challenge | 規則沒設路徑條件 → **連字幕檔也包到** |
+| 一般瀏覽器 UA | 200、無 challenge 標頭 | 真人零摩擦 |
+| 假 Googlebot（機房 IP） | 403 challenge | `cf.client.bot` 只認驗證過的，冒名照擋 |
+| `python-requests` | 403、**無** cf-mitigated | 是 Worker 的 UA 名單擋的，不是 WAF |
+| manemu 真人 UA | 200、無 challenge | **三兄弟的訪客不會被問兩次** |
+
+### 分工結論
+
+```
+自報身分的爬蟲   → WAF Managed Challenge（zone 層，全站台涵蓋）
+偽裝成瀏覽器的   → 各站自己的 Turnstile（三兄弟有；ytplayer 靠 UA 名單 + noindex）
+搜尋引擎收錄     → noindex（challenge 不管這件事）
+```
+
+**這套擋不到什麼**：偽裝成 Chrome 的 scraper、無頭瀏覽器 —— 兩層都穿得過。
+要擋它們就得改成路徑型規則，代價是每個真人訪客（含你分享連結給的人）都要過閘門。
+以「noindex + 網址不可猜的自用工具」的威脅模型來說**不划算，所以刻意不做**。
+
+### ⚠ zone 層規則的副作用（三兄弟都要想一遍）
+
+1. **連結預覽會消失**：Slackbot／Twitterbot／Discordbot 的 UA 都含 `bot`，
+   在聊天軟體貼連結不會有預覽卡。對刻意 noindex 的站台算附贈的好處
+2. **機器對機器的 callback 會靜默失敗**：LINE／Telegram／Slack 推送、
+   GitHub webhook（UA `GitHub-Hookshot`）、金流回呼、外部 cron ——
+   只要 UA 含 `bot` 就被 challenge 擋掉，對方收到 403，你這邊毫無動靜。
+   **有這類流量的話**：加一條 **Skip** 規則排除那些路徑（Free 版 5 條規則，還剩 4 條），
+   順序放在 challenge 規則之前；或給 challenge 規則加主機條件
+
+### 方案成本（2026-08-17 查證）
+
+| | Free 方案 |
 |---|---|
-| 無頭爬蟲、腳本 scraper、語料抓取 | ✅ 大多擋得掉（要跑 JS + 通過指紋檢查） |
-| 拿到連結、用瀏覽器打開的人 | ❌ 完全擋不住（本來也不該擋 —— 分享是功能） |
-| 搜尋引擎收錄 | ⚠ 靠 noindex，不是靠 challenge |
+| WAF Custom Rules | **5 條**，動作除了 Log 以外全部可用（含 Managed Challenge）|
+| Turnstile | 免費：每帳號 20 個 widget、每月 100 萬次 siteverify |
 
-所以 challenge 是**第三層**：noindex（第一層）→ UA 閘門（第二層）→ challenge。
+來源：[WAF custom rules](https://developers.cloudflare.com/waf/custom-rules/)、
+[Turnstile plans](https://developers.cloudflare.com/turnstile/plans/)
 
-### 建議設定（Free 方案就有）
+## 3.2 沒採用的方案（別重新提案）
 
-WAF → Custom rules → Create rule：
-
-```
-名稱：challenge-pages
-運算式：
-  (http.request.uri.path eq "/" or starts_with(http.request.uri.path, "/watch/")
-   or http.request.uri.path eq "/admin")
-  and not cf.client.bot
-動作：Managed Challenge
-```
-
-要點：
-
-- **只挑頁面路徑**。千萬別把 `/subs/*` 與 POST API 放進去：
-  player 頁抓字幕、ext 送 ingest、PWA 送 `/share` 都會直接壞掉
-- `not cf.client.bot` = 放行 Cloudflare 已驗證的正牌爬蟲（同樣是為了讓 noindex 被讀到）
-- Managed Challenge 對真人多半是**無感的**（不是圖片點選），且會給 cookie，不會每頁都跳
-- `/admin` 若已經掛在 Cloudflare Access 後面，這條對它只是多一層，可留可不留
-
-### 不建議
-
-- ❌ **Bot Fight Mode**（Security → Bots）：它是全站無差別的，會連 `/ingest`、`/subs` 一起挑戰，
-  ext 與 player 都會壞。要用得先確認能對路徑豁免（Super Bot Fight Mode 才有，付費）
+- ❌ **路徑型 challenge**（挑戰所有頁面）：真人也要過閘門，且與三兄弟的 Turnstile 疊成兩次
+- ❌ **Bot Fight Mode**（Security → Bots）：全站無差別，會連 `/ingest`、`/subs` 一起挑戰，
+  ext 與 player 都會壞。要路徑豁免得用 Super Bot Fight Mode（付費）
 - ❌ **robots.txt 加 Disallow**：老陷阱 —— 禁止爬取 = 爬蟲讀不到 noindex，
   網址反而可能因為外部連結被收錄（robots.txt 必須維持 Allow）
 
@@ -199,7 +232,8 @@ Access 登入是**跨 application SSO**：認證完會逐一造訪帳號下每�
 |---|---|---|
 | 1 | 全站 `X-Robots-Tag: noindex, nofollow, noarchive` + meta；robots.txt 維持 Allow | 已做 |
 | 2 | `workers.dev` 關閉、UA 爬蟲閘門 403 | 已做 |
-| 3 | **Turnstile challenge**（頁面路徑，HMAC 簽章通行證 30 天） | 已做 —— 只要 Secret 設齊就生效 |
+| 3 | **WAF Managed Challenge（UA 型，zone 層）** —— ytplayer + 三兄弟全涵蓋 | 已做（§3.1，實測過）|
+| 3b | Turnstile（應用層，HMAC 簽章通行證 30 天） | 程式好了、**刻意休眠**；三兄弟各自有自己的 |
 | 4 | 清單頁 key-gate、`/admin` Cloudflare Access、API key | 已做 |
 
 殘餘風險不變且已接受：**拿到 `/watch/{id}` 連結的人看得到那支影片的字幕**。
