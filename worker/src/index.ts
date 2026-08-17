@@ -47,6 +47,26 @@ const BASE: Record<string, string> = {
   'x-robots-tag': 'noindex, nofollow, noarchive',
 };
 
+// --- 爬蟲閘門（不需要 Cloudflare dashboard 的那一層）---
+//
+// 威脅模型：連結外流 → 「我看過哪些影片」變成可搜尋的（migration.md §5）。
+// 已有的防線是 noindex；這層擋的是**不理會 noindex 的抓取者**（LLM 語料爬蟲、
+// 內容農場、通用 scraper）。UA 可以偽造，所以這是提高成本、不是保證。
+//
+// ⚠ 關鍵取捨：**正牌搜尋引擎必須放行**。把 Googlebot 擋在門外，它就讀不到
+// `X-Robots-Tag: noindex` —— 反而可能只憑外部連結把網址收進索引（這正是
+// 「robots.txt 用 Disallow 會害死自己」的同一個陷阱，見 migration.md §5）。
+// 所以：正牌搜尋引擎放行讓它看見 noindex，其餘自稱爬蟲的一律擋。
+const SEARCH_ENGINES = /googlebot|bingbot|slurp|duckduckbot|baiduspider|yandexbot|applebot/i;
+const UNWANTED_BOTS =
+  /gptbot|oai-searchbot|chatgpt-user|ccbot|claudebot|anthropic-ai|perplexitybot|bytespider|amazonbot|meta-externalagent|facebookbot|imagesiftbot|dataforseobot|semrushbot|ahrefsbot|mj12bot|dotbot|petalbot|scrapy|python-requests|python-urllib|go-http-client|libwww-perl|httrack|wget\b|node-fetch|axios\/|okhttp|java\/|headlesschrome|phantomjs|puppeteer|playwright/i;
+
+export function botVerdict(ua: string): 'allow' | 'search-engine' | 'block' {
+  if (SEARCH_ENGINES.test(ua)) return 'search-engine'; // 放行，讓它讀到 noindex 後自己撤掉
+  if (!ua.trim()) return 'block'; // 沒有 UA 的一律擋：瀏覽器不會這樣
+  return UNWANTED_BOTS.test(ua) ? 'block' : 'allow';
+}
+
 const json = (data: unknown, status = 200): Response =>
   new Response(JSON.stringify(data, null, 2), {
     status,
@@ -73,6 +93,16 @@ export default {
 
     const html = (body: string) =>
       new Response(body, { headers: { 'content-type': 'text/html; charset=utf-8', ...BASE } });
+
+    // 爬蟲閘門只擋「頁面」：/subs 與 API 不擋 —— 它們要嘛需要 key，要嘛需要先知道 videoId，
+    // 而且 player 頁與本機工具都得抓得到。擋頁面就足以讓爬蟲爬不到影片清單與字幕內容。
+    const isPage = path === '/' || path === '/admin' || path === '/share' || /^\/watch\/[A-Za-z0-9_-]{11}$/.test(path);
+    if (req.method === 'GET' && isPage && botVerdict(req.headers.get('user-agent') ?? '') === 'block') {
+      return new Response('Not available to automated clients.\n', {
+        status: 403,
+        headers: { 'content-type': 'text/plain; charset=utf-8', ...BASE },
+      });
+    }
 
     if (req.method === 'GET' && path === '/health') {
       // 今日花費隨時可見（成本事故的教訓：看不見的花費才是危險的花費）
