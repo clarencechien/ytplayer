@@ -82,6 +82,31 @@ WAF → Custom rules → Create rule：
 - ❌ **robots.txt 加 Disallow**：老陷阱 —— 禁止爬取 = 爬蟲讀不到 noindex，
   網址反而可能因為外部連結被收錄（robots.txt 必須維持 Allow）
 
+## 3.5 排錯：`/admin` 登入被導到 kvsplayer（2026-08-17 實例）
+
+症狀：開 `https://ytplayer.ai-apps.work/admin` → 走完 Access 登入後，
+瀏覽器停在 `https://kvsplayer.ai-apps.work/cdn-cgi/access/authorized?...` 不動。
+
+診斷（把網址的 `state` 參數 base64 解開就看得到）：
+
+```
+hostname    = ytplayer.ai-apps.work     ← 目標其實是對的
+redirectURL = /admin/
+isSSO       = true                      ← 關鍵
+```
+
+Access 登入是**跨 application SSO**：認證完會逐一造訪帳號下每個 app 的
+`/cdn-cgi/access/authorized` 去種 cookie。kvsplayer 的 Worker 早就刪了、
+主機連不上（curl 直接 status 000），但**保護它的 Access application 還在** ——
+於是整條登入鏈斷在那個死掉的主機上。
+
+修法：Zero Trust → Access → Applications → 刪掉 `kvsplayer.ai-apps.work` 的 application。
+當下的繞路：卡住後直接重打 `https://ytplayer.ai-apps.work/admin`
+（ytplayer 的 cookie 多半已經種好了）。
+
+> 通則：**下線一個服務時，保護它的東西要一起下線**（Access app、DNS、WAF 規則），
+> 否則會留下這種只有在登入時才發作的幽靈。已補進 migration.md 的 M5 收工清單。
+
 ## 4. 現況總表
 
 | 層 | 內容 | 誰做 |
