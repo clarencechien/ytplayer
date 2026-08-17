@@ -9,6 +9,10 @@
   // gemini-3.5-flash + thinking 實質關閉 = 四組同片對決的贏家（docs/model-experiment.md）：
   // 0 缺句、品質同思考版、tokens -31% 且輸出佔比從 3~4 倍降到 1/3。
   // 3.6-flash 關思考後會「譯文對錯句」（禁用）；3.5-flash-lite 缺 27 句（只配重跑用 ?model= 指定）。
+  // Turnstile 的 site key 是**公開值**（本來就會出現在 HTML 裡），放這裡才不會被部署踩掉 ——
+  // 2026-08-17 實測：加在 dashboard 的明文變數，下一次部署就被這個 vars 區塊蓋掉。
+  // 要啟用 challenge：把 site key 填進來（取消註解），secret 另外存成 Secret 型態。
+  // "TURNSTILE_SITE_KEY": "0x4AAAAAAA…",
   "vars": { "GEMINI_MODEL": "gemini-3.5-flash" },
   // 關掉 *.workers.dev 與預覽網址：對外只留自訂網域 ytplayer.ai-apps.work。
   // 少一個公開入口 = 少一個被掃到的面（workers.dev 子網域是可枚舉的，
