@@ -19,6 +19,17 @@ import { retimeCues, type RetimeCue } from './retime';
 import { listVideos, routeSource, toSrt } from './pipeline';
 import { handleJob, watchdog, readDailyBudget, type JobMsg, type MsgLike, type WatchRequest } from './jobs';
 import { watchPage, indexPage, adminPage, sharePage } from './player';
+import {
+  turnstileConfigured,
+  challengePage,
+  siteverify,
+  issuePass,
+  passValid,
+  passCookie,
+  readCookie,
+  safeNext,
+  PASS_COOKIE,
+} from './turnstile';
 
 export interface Env {
   SUBS: R2Bucket;
@@ -35,6 +46,10 @@ export interface Env {
   COST_OUT_NTD_PER_M?: string; // 輸出費率 NT$/M tokens（預設 280 ≈ $9.00×31；thinking 計此價）
   COST_NTD_PER_M?: string; // 舊：單一混合費率，設了就蓋過雙費率
   ALLOWED_EMAIL?: string; // Cloudflare Access 使用者白名單（/admin 的人用認證；程式仍用 key）
+  // Turnstile（隱私第三層）：兩個都設才生效。**site key 也要用 Secret 存** ——
+  // dashboard 的明文變數會被 git 部署蓋掉（硬規則 #1 的 var-stomping）
+  TURNSTILE_SITE_KEY?: string;
+  TURNSTILE_SECRET?: string;
 }
 
 // ext popup 與 player 頁都以跨域 fetch 存取，統一開 CORS，安全性由 key 把關。
@@ -97,11 +112,38 @@ export default {
     // 爬蟲閘門只擋「頁面」：/subs 與 API 不擋 —— 它們要嘛需要 key，要嘛需要先知道 videoId，
     // 而且 player 頁與本機工具都得抓得到。擋頁面就足以讓爬蟲爬不到影片清單與字幕內容。
     const isPage = path === '/' || path === '/admin' || path === '/share' || /^\/watch\/[A-Za-z0-9_-]{11}$/.test(path);
-    if (req.method === 'GET' && isPage && botVerdict(req.headers.get('user-agent') ?? '') === 'block') {
+    const verdict = botVerdict(req.headers.get('user-agent') ?? '');
+    if (req.method === 'GET' && isPage && verdict === 'block') {
       return new Response('Not available to automated clients.\n', {
         status: 403,
         headers: { 'content-type': 'text/plain; charset=utf-8', ...BASE },
       });
+    }
+
+    // Turnstile 通行證回收端點（頁面上的 widget 過關後打這裡換 cookie）
+    if (req.method === 'POST' && path === '/turnstile/verify') {
+      if (!turnstileConfigured(env)) return json({ ok: false, error: 'turnstile 未設定' }, 400);
+      const body = (await req.json().catch(() => ({}))) as { token?: unknown; next?: unknown };
+      const ok =
+        typeof body.token === 'string' &&
+        (await siteverify(env.TURNSTILE_SECRET!, body.token, req.headers.get('cf-connecting-ip')));
+      if (!ok) return json({ ok: false, error: '驗證未通過' }, 403);
+      return new Response(JSON.stringify({ ok: true, next: safeNext(body.next) }), {
+        headers: {
+          'content-type': 'application/json; charset=utf-8',
+          'set-cookie': passCookie(await issuePass(env.TURNSTILE_SECRET!)),
+          ...BASE,
+        },
+      });
+    }
+
+    // 隱私第三層（docs/privacy-hardening.md §3）：頁面要先過 Turnstile。
+    // 四種情況直接放行：沒設定、正牌搜尋引擎（要讓它讀到 noindex）、自己人（key/Access）、已有通行證
+    if (req.method === 'GET' && isPage && turnstileConfigured(env) && verdict !== 'search-engine' && !authorized) {
+      const pass = readCookie(req.headers.get('cookie'), PASS_COOKIE);
+      if (!(await passValid(env.TURNSTILE_SECRET!, pass))) {
+        return html(challengePage(env.TURNSTILE_SITE_KEY!, url.pathname + url.search));
+      }
     }
 
     if (req.method === 'GET' && path === '/health') {
@@ -112,6 +154,8 @@ export default {
         service: 'ytplayer',
         ok: true,
         ingestKeyConfigured: keyConfigured,
+        // 兩個都設才會生效 —— 部署後先看這行確認 Secret 有進來（明文變數會被部署蓋掉）
+        turnstileConfigured: turnstileConfigured(env),
         today: { tokens: budget.tokens, llmCalls: budget.calls, dailyCapTokens: dailyCap },
       });
     }
