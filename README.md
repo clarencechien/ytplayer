@@ -60,8 +60,10 @@ Caption track 有四個層級，每層是不同的題目（詳見 [docs/handoff-
 - **花費保險絲四層**：Google 端 prepay 配額 → 每步 3 次重試後永久失敗 → 每片 token 上限
   （text 500k / video 3M）→ 全域日預算 2M；成本事故的教訓見
   [docs/asr-language-experiment.md](docs/asr-language-experiment.md) §4.2
-- **隱私**：全站 noindex（含 robots.txt 不 Disallow 的陷阱解法）；清單 key-gate；
-  `/watch` 公開可分享（已接受的殘餘風險記錄在 [docs/migration.md](docs/migration.md) §5）
+- **隱私三層**：全站 noindex（robots.txt 維持 Allow — Disallow 反而害死自己）→
+  關掉 `*.workers.dev` + UA 爬蟲閘門（正牌搜尋引擎放行讓它讀到 noindex，語料/SEO 爬蟲 403）
+  → Cloudflare Managed Challenge（待人工設定）。清單 key-gate、`/admin` Access、API key
+  （[docs/privacy-hardening.md](docs/privacy-hardening.md)）
 - **glossary 疊層**：channel 鎖定表 > genre 通用表 > 當片自動抽，同 term 上層贏、合併上限 80 條；
   兩條路由同源（text 吃三層、video 吃前兩層）。實測人工表對模型有實際約束力
   （鎖定譯法 0/7 → 6/7 句，見 [docs/exp-2026-08-16.md](docs/exp-2026-08-16.md) E2）
@@ -71,7 +73,7 @@ Caption track 有四個層級，每層是不同的題目（詳見 [docs/handoff-
   最多 2 輪；儀表板顯示「⚠ N 句未譯」+ **✏補譯** 鈕
   （[docs/patch-untranslated.md](docs/patch-untranslated.md)）
 
-prompt 目前 **v5**；worker 測試 **142 個**。品質防線與所有實證教訓見
+prompt 目前 **v5**；worker 測試 **146 個**。品質防線與所有實證教訓見
 **[docs/lessons-learned.md](docs/lessons-learned.md)**；合併決策材料見
 [docs/kvsplayer-merge-todo.md](docs/kvsplayer-merge-todo.md)。
 
@@ -107,6 +109,7 @@ video 路由的影片另有**字卡層**（🃏 疊畫面上緣、逐句稿有�
 |---|---|---|
 | **ext 抓 ucid**（F4）| `chrome://extensions` 重新載入 ext → 送一支片 → 看 `/subs/{id}/source.json` 有沒有 `meta.channelId` | 容器內連不到 YouTube（429／connection reset）—— 與「不做伺服器抓字幕」是同一道牆 |
 | **PWA 手機送片** | 手機開站台 → 加到主畫面 → 用 YouTube 分享或貼連結 → 桌機 popup 看待補佇列 | 需要真手機 |
+| **Managed Challenge** | dashboard 設一條 WAF 規則（運算式與雷區見 [privacy-hardening.md](docs/privacy-hardening.md) §3）| 我沒有 Cloudflare dashboard 權限 |
 | **劇場模式畫質**（畫質 A 案）| player 頁按 `T` → 看畫質標示有沒有升上去 | 需要真螢幕與真播放器 |
 | **G1 跨影片一致性** | 送同一個頻道的第二支片，看 `glossary.json` 的 `layers.channelKey` 是否命中同一張表 | 手上沒有同頻道的第二支已 ingest 影片 |
 
@@ -149,6 +152,7 @@ video 路由的影片另有**字卡層**（🃏 疊畫面上緣、逐句稿有�
 | [docs/model-reeval-sop.md](docs/model-reeval-sop.md) | **模型重評 SOP**：觸發條件、固定五步、判讀規則（候選 mean 要超出基準 min–max）|
 | [docs/exp-2026-08-16.md](docs/exp-2026-08-16.md) | **上線後補測**：G1 頻道表約束力、3.6-flash 重評、lite × 協定總表（含還沒測的誠實清單）|
 | [docs/patch-untranslated.md](docs/patch-untranslated.md) | **未譯句自動偵測 + 補譯**：三種病因解剖、P0 預防、P1 補譯步驟、實測 |
+| [docs/privacy-hardening.md](docs/privacy-hardening.md) | **隱私三層**：workers.dev 關閉、UA 爬蟲閘門、Managed Challenge 的正確設法與雷區 |
 | [docs/glossary-layers.md](docs/glossary-layers.md) | Glossary 疊層（channel/genre/per-video）：G1+G3 已實作、G2 未做 |
 | [docs/pwa-plan.md](docs/pwa-plan.md) | PWA + 手機送片計畫與執行紀錄（桌機補收路線，已實作） |
 | [docs/cost-optimization.md](docs/cost-optimization.md) | 成本優化 L1+L2（已實作，單片 -51%）+ 單片費用解剖 + 漂移發現 |

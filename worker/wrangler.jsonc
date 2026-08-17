@@ -10,6 +10,12 @@
   // 0 缺句、品質同思考版、tokens -31% 且輸出佔比從 3~4 倍降到 1/3。
   // 3.6-flash 關思考後會「譯文對錯句」（禁用）；3.5-flash-lite 缺 27 句（只配重跑用 ?model= 指定）。
   "vars": { "GEMINI_MODEL": "gemini-3.5-flash" },
+  // 關掉 *.workers.dev 與預覽網址：對外只留自訂網域 ytplayer.ai-apps.work。
+  // 少一個公開入口 = 少一個被掃到的面（workers.dev 子網域是可枚舉的，
+  // 而且不吃我們掛在自訂網域上的任何 Zone 層設定，例如 WAF/Access 規則）。
+  // 代價：分支預覽網址也沒了 —— 要預覽就本機 `wrangler dev`。
+  "workers_dev": false,
+  "preview_urls": false,
   // cron = 零成本看門狗（migration.md §2）：只掃描 + enqueue，永不碰 LLM。
   // 2026-08-13 成本事故的三個修法（分段可續跑、嘗試上限、開工即寫狀態）都已落在 queue 步驟裡。
   "triggers": { "crons": ["*/5 * * * *"] },

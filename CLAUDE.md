@@ -11,7 +11,9 @@
    [docs/model-experiment.md](docs/model-experiment.md)，改動前先看它
 2. **thinking 以輸出價計費**，翻譯是機械任務不需要它 — 曾造成單日 NT$ 數百的帳單事故，
    完整教訓在 [docs/gemini-api-lessons.md](docs/gemini-api-lessons.md)（跨專案通用，別重學）
-3. **紅線**：YouTube 自動翻譯軌（`tlang`）永不作為輸入；中文軌拒收（路由表 `routeSource`）
+3. **紅線**：YouTube 自動翻譯軌（`tlang`）永不作為輸入；中文軌拒收（路由表 `routeSource`）；
+   robots.txt **永遠 Allow**（Disallow = 爬蟲讀不到 noindex，反而被收錄）；
+   爬蟲閘門**放行正牌搜尋引擎**（同一個道理，見 docs/privacy-hardening.md）
 4. **LLM 工作只能在 queue consumer 跑**（fetch handler 含 waitUntil 會被砍 — 實測）；
    cron 是零成本看門狗，永不碰 LLM
 5. **花費保險絲四層**不可拆：Google prepay → 每步 3 次重試永久失敗 → 每片 token 上限
@@ -23,7 +25,7 @@
 
 ## 常用操作
 
-- 測試：`cd worker && npx vitest run`（142 個，push 前必綠）
+- 測試：`cd worker && npx vitest run`（146 個，push 前必綠）
 - 手動翻譯：`POST /translate/{id}?force=1`（key：`x-ingest-key`）；A/B 擂台：`&model=…`
 - 補譯未譯句：`POST /patch/{id}`（只重譯未譯／原文照抄的句子，不重跑整片）
 - 進度/花費：`/subs/{id}/status.json`、`/admin` 儀表板
