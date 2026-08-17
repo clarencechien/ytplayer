@@ -62,8 +62,8 @@ Caption track 有四個層級，每層是不同的題目（詳見 [docs/handoff-
   [docs/asr-language-experiment.md](docs/asr-language-experiment.md) §4.2
 - **隱私三層**：全站 noindex（robots.txt 維持 Allow — Disallow 反而害死自己）→
   關掉 `*.workers.dev` + UA 爬蟲閘門（正牌搜尋引擎放行讓它讀到 noindex，語料/SEO 爬蟲 403）
-  → **Turnstile challenge**（頁面路徑，HMAC 簽章通行證 30 天；自己人與搜尋引擎不擋）。
-  清單 key-gate、`/admin` Access、API key
+  → **WAF Managed Challenge**（UA 型、zone 層，`ai-apps.work` 全站台涵蓋；真人零摩擦）。
+  應用層 Turnstile 程式已備妥但刻意休眠。清單 key-gate、`/admin` Access、API key
   （[docs/privacy-hardening.md](docs/privacy-hardening.md)）
 - **glossary 疊層**：channel 鎖定表 > genre 通用表 > 當片自動抽，同 term 上層贏、合併上限 80 條；
   兩條路由同源（text 吃三層、video 吃前兩層）。實測人工表對模型有實際約束力
@@ -110,7 +110,7 @@ video 路由的影片另有**字卡層**（🃏 疊畫面上緣、逐句稿有�
 |---|---|---|
 | **ext 抓 ucid**（F4）| `chrome://extensions` 重新載入 ext → 送一支片 → 看 `/subs/{id}/source.json` 有沒有 `meta.channelId` | 容器內連不到 YouTube（429／connection reset）—— 與「不做伺服器抓字幕」是同一道牆 |
 | **PWA 手機送片** | 手機開站台 → 加到主畫面 → 用 YouTube 分享或貼連結 → 桌機 popup 看待補佇列 | 需要真手機 |
-| **challenge 二選一** | 要嘛 WAF Managed Challenge（dashboard 一條規則、不會被部署踩），要嘛 Turnstile（site key 填進 `wrangler.jsonc`、secret 存 Secret 型態）。**別兩個都開** —— 會被問兩次。比較表見 [privacy-hardening.md](docs/privacy-hardening.md) §3 | 我沒有 dashboard 權限；明文變數已被部署蓋掉兩次 |
+| **三兄弟有沒有 webhook** | zone 層 challenge 規則對 `ai-apps.work` 全部主機生效 —— 若 kikemu／sukemu／manemu 有接 LINE／Slack／GitHub 等 UA 含 `bot` 的機器推送，會被靜默 403。有的話加一條 Skip 規則（[§3.1](docs/privacy-hardening.md)）| 我看不到那三個專案的流量 |
 | **劇場模式畫質**（畫質 A 案）| player 頁按 `T` → 看畫質標示有沒有升上去 | 需要真螢幕與真播放器 |
 | **G1 跨影片一致性** | 送同一個頻道的第二支片，看 `glossary.json` 的 `layers.channelKey` 是否命中同一張表 | 手上沒有同頻道的第二支已 ingest 影片 |
 
