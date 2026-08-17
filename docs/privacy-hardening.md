@@ -103,10 +103,30 @@ curl -s "https://ytplayer.ai-apps.work/?key=你的KEY" | grep -c cf-turnstile # 
 `/subs/*`、所有 API、`/health`、`/robots.txt`、`/manifest.webmanifest`、`/sw.js`、圖示。
 player 頁抓字幕、ext ingest、PWA、本機 ab-runner 都不受影響。
 
-### 殘留的 WAF 選項（可有可無）
+### 二選一：Turnstile（應用層）vs WAF Managed Challenge（邊緣層）
 
-下面這節是**沒有 Turnstile 程式碼時**的替代方案。既然應用層已經做了，
-除非你想連 `/subs` 也擋，否則不必再加 WAF 規則（兩層一起開會變成問兩次）。
+**兩條路擇一，不要都開** —— 都開會被問兩次。
+
+| | Turnstile（本專案程式） | WAF Managed Challenge |
+|---|---|---|
+| 設定在哪 | site key 進 `wrangler.jsonc`、secret 存 **Secret 型態** | dashboard 一條規則 |
+| 會不會被部署踩掉 | site key 進 repo 後不會；**明文變數會**（已踩兩次）| **不會**（Zone 層設定，與 Worker 部署無關）|
+| 版本控管 | ✅ 在 git 裡、有 10 個測試 | ❌ 改了沒紀錄 |
+| 精細度 | 知道「自己人（key/Access）」「搜尋引擎」「已通過」 | 只能用路徑與 `cf.client.bot` 表達 |
+| 自己會不會被問 | 帶 `?key=` 或 Access 就**完全不問** | 會問，過一次給 cookie（預設 30 分鐘） |
+| 通行期限 | 30 天 | Challenge Passage 設定（預設 30 分鐘） |
+
+**建議**：如果你不想再管 secret，就用 **WAF Managed Challenge** ——
+Turnstile 程式碼沒設定就自動休眠，不會衝突、也不用刪。
+如果你想要「自己人完全不被打擾 + 設定進版控」，就走 Turnstile。
+
+### 2026-08-17 的實際教訓
+
+TURNSTILE_SITE_KEY / TURNSTILE_SECRET 加在 dashboard 的**明文變數**，
+下一次 git 部署就被 `wrangler.jsonc` 的 `vars` 區塊整個蓋掉（`/health` 的
+`turnstileConfigured` 變回 false）。**這就是硬規則 #1**，第三次踩到。
+正確做法二選一：site key 寫進 `wrangler.jsonc`（它本來就是公開值），
+或兩個都存成 **Secret 型態**（Secret 不受部署影響）。
 
 ## 3.1 Cloudflare WAF challenge（替代方案，dashboard 設定）
 
