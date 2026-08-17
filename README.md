@@ -62,7 +62,8 @@ Caption track 有四個層級，每層是不同的題目（詳見 [docs/handoff-
   [docs/asr-language-experiment.md](docs/asr-language-experiment.md) §4.2
 - **隱私三層**：全站 noindex（robots.txt 維持 Allow — Disallow 反而害死自己）→
   關掉 `*.workers.dev` + UA 爬蟲閘門（正牌搜尋引擎放行讓它讀到 noindex，語料/SEO 爬蟲 403）
-  → Cloudflare Managed Challenge（待人工設定）。清單 key-gate、`/admin` Access、API key
+  → **Turnstile challenge**（頁面路徑，HMAC 簽章通行證 30 天；自己人與搜尋引擎不擋）。
+  清單 key-gate、`/admin` Access、API key
   （[docs/privacy-hardening.md](docs/privacy-hardening.md)）
 - **glossary 疊層**：channel 鎖定表 > genre 通用表 > 當片自動抽，同 term 上層贏、合併上限 80 條；
   兩條路由同源（text 吃三層、video 吃前兩層）。實測人工表對模型有實際約束力
@@ -73,7 +74,7 @@ Caption track 有四個層級，每層是不同的題目（詳見 [docs/handoff-
   最多 2 輪；儀表板顯示「⚠ N 句未譯」+ **✏補譯** 鈕
   （[docs/patch-untranslated.md](docs/patch-untranslated.md)）
 
-prompt 目前 **v5**；worker 測試 **146 個**。品質防線與所有實證教訓見
+prompt 目前 **v5**；worker 測試 **156 個**。品質防線與所有實證教訓見
 **[docs/lessons-learned.md](docs/lessons-learned.md)**；合併決策材料見
 [docs/kvsplayer-merge-todo.md](docs/kvsplayer-merge-todo.md)。
 
@@ -109,8 +110,7 @@ video 路由的影片另有**字卡層**（🃏 疊畫面上緣、逐句稿有�
 |---|---|---|
 | **ext 抓 ucid**（F4）| `chrome://extensions` 重新載入 ext → 送一支片 → 看 `/subs/{id}/source.json` 有沒有 `meta.channelId` | 容器內連不到 YouTube（429／connection reset）—— 與「不做伺服器抓字幕」是同一道牆 |
 | **PWA 手機送片** | 手機開站台 → 加到主畫面 → 用 YouTube 分享或貼連結 → 桌機 popup 看待補佇列 | 需要真手機 |
-| **Managed Challenge** | dashboard 設一條 WAF 規則（運算式與雷區見 [privacy-hardening.md](docs/privacy-hardening.md) §3）| 我沒有 Cloudflare dashboard 權限 |
-| **刪掉 kvsplayer 的 Access application** | Zero Trust → Access → Applications → 刪除 —— 它還在，害 `/admin` 的登入鏈斷在死掉的主機上（[§3.5](docs/privacy-hardening.md)）| 同上 |
+| **Turnstile 的兩個值改存 Secret** | Workers → Variables and Secrets → 型態選 **Secret**（不是 Text）；部署後 `/health` 的 `turnstileConfigured` 要是 `true` | 明文變數會被 git 部署蓋掉（硬規則 #1） |
 | **劇場模式畫質**（畫質 A 案）| player 頁按 `T` → 看畫質標示有沒有升上去 | 需要真螢幕與真播放器 |
 | **G1 跨影片一致性** | 送同一個頻道的第二支片，看 `glossary.json` 的 `layers.channelKey` 是否命中同一張表 | 手上沒有同頻道的第二支已 ingest 影片 |
 

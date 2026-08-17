@@ -42,7 +42,73 @@ curl -s -o /dev/null -w '%{http_code}\n' -A 'Googlebot/2.1' https://ytplayer.ai-
 curl -s -o /dev/null -w '%{http_code}\n' -H 'user-agent;' https://ytplayer.ai-apps.work/                    # 403（空 UA）
 ```
 
-## 3. Cloudflare challenge（**要你在 dashboard 點**，我沒有這把鑰匙）
+## 3. Turnstile challenge（**已實作**，2026-08-17）
+
+> ⚠ **只加環境變數不會生效**。Turnstile 不是開關，是一段流程：
+> 頁面要渲染 widget、後端要拿 token 去 `siteverify`、通過後要發通行證。
+> 這三段都在 `worker/src/turnstile.ts` 與 `index.ts`。
+
+### 流程
+
+```
+GET /watch/xxx  →  沒有通行證 cookie？
+                   ├ 有 → 照常給頁面
+                   └ 沒有 → 回 challenge 頁（Turnstile widget）
+                             ↓ 過關拿到 token
+                        POST /turnstile/verify  →  Cloudflare siteverify
+                             ↓ 成功
+                        Set-Cookie: ytp_pass=<exp>.<HMAC 簽章>（30 天）
+                             ↓
+                        location.replace(原本要去的網址)
+```
+
+### 四個「直接放行」的情況（缺一不可）
+
+| 情況 | 為什麼 |
+|---|---|
+| 兩個環境變數沒設齊 | **沒設定就完全不生效** —— 半套的安全機制比沒有更糟 |
+| 正牌搜尋引擎（`botVerdict` 判定） | 擋了它就讀不到 noindex（同 §2 的坑） |
+| 自己人（`?key=` / `x-ingest-key` / Access 通過） | 不要讓自己每次都過閘門 |
+| 已有有效通行證 cookie | 30 天內只問一次 |
+
+### 為什麼通行證要簽章
+
+`ytp_pass` 的值是 `到期秒數.HMAC-SHA256(secret, 到期秒數)`。
+**不簽章就等於「有 cookie 就算數」**，爬蟲隨手塞一個就繞過去了。
+簽章用的就是 `TURNSTILE_SECRET` —— 換掉 secret 等於一次撤銷所有通行證。
+無狀態設計，不需要 KV/DO 存 session。
+
+### ⚠ 設定方式：**兩個都要用 Secret，不能用明文變數**
+
+`TURNSTILE_SITE_KEY` 雖然是公開資訊（會出現在 HTML 裡），但如果你把它加成
+**dashboard 的明文變數**，下一次 git 部署就會被 `wrangler.jsonc` 的 `vars` 覆蓋掉
+—— 這就是硬規則 #1 的 var-stomping，2026-08-13 的帳單事故成因之一。
+
+```
+Workers → Settings → Variables and Secrets → 型態選 Secret（不是 Text）
+  TURNSTILE_SITE_KEY   = 0x4AAAAAAA…
+  TURNSTILE_SECRET     = 0x4AAAAAAA…
+```
+
+驗證有沒有吃到（部署後）：
+
+```bash
+curl -s https://ytplayer.ai-apps.work/health | grep turnstileConfigured   # 要是 true
+curl -s https://ytplayer.ai-apps.work/ | grep -o 'cf-turnstile'           # 出現 = 閘門生效
+curl -s "https://ytplayer.ai-apps.work/?key=你的KEY" | grep -c cf-turnstile # 0 = 自己人不被擋
+```
+
+### 不擋的路徑（沿用 §2 的分界）
+
+`/subs/*`、所有 API、`/health`、`/robots.txt`、`/manifest.webmanifest`、`/sw.js`、圖示。
+player 頁抓字幕、ext ingest、PWA、本機 ab-runner 都不受影響。
+
+### 殘留的 WAF 選項（可有可無）
+
+下面這節是**沒有 Turnstile 程式碼時**的替代方案。既然應用層已經做了，
+除非你想連 `/subs` 也擋，否則不必再加 WAF 規則（兩層一起開會變成問兩次）。
+
+## 3.1 Cloudflare WAF challenge（替代方案，dashboard 設定）
 
 ### 這擋得住什麼、擋不住什麼
 
@@ -109,11 +175,11 @@ Access 登入是**跨 application SSO**：認證完會逐一造訪帳號下每�
 
 ## 4. 現況總表
 
-| 層 | 內容 | 誰做 |
+| 層 | 內容 | 狀態 |
 |---|---|---|
 | 1 | 全站 `X-Robots-Tag: noindex, nofollow, noarchive` + meta；robots.txt 維持 Allow | 已做 |
-| 2 | `workers.dev` 關閉、UA 爬蟲閘門 403 | 已做（本次） |
-| 3 | Managed Challenge on 頁面路徑 | **等你在 dashboard 點** |
+| 2 | `workers.dev` 關閉、UA 爬蟲閘門 403 | 已做 |
+| 3 | **Turnstile challenge**（頁面路徑，HMAC 簽章通行證 30 天） | 已做 —— 只要 Secret 設齊就生效 |
 | 4 | 清單頁 key-gate、`/admin` Cloudflare Access、API key | 已做 |
 
 殘餘風險不變且已接受：**拿到 `/watch/{id}` 連結的人看得到那支影片的字幕**。
