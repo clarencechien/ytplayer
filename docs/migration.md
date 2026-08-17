@@ -187,6 +187,16 @@ kvsplayer.ai-apps.work DNS 指向 ytplayer（或加 301 轉址）。
 人工面（已執行）：kvsplayer Worker 與 `kvs-jobs` queue 已刪除。
 `kvs-krsub` bucket 依保險原則保留 30 天（2026-09 中旬後可刪）；ytpoc repo 封存為選配。
 
+**⚠ 收工清單漏掉的一項（2026-08-17 才發現）：Cloudflare Access application**。
+刪 Worker 不會刪掉保護它的 Access app —— 而 Access 登入是**跨 app SSO**：
+認證後它會逐一造訪帳號下每個 app 的 `/cdn-cgi/access/authorized` 種 cookie。
+kvsplayer 那個 app 還在、但主機已經不存在（連線直接失敗）→ **整條登入鏈斷在那裡**，
+使用者登入 ytplayer 的 `/admin` 會卡在 `kvsplayer.ai-apps.work/cdn-cgi/access/authorized`。
+
+修法：Zero Trust → Access → Applications → 刪掉 `kvsplayer.ai-apps.work` 那個 application。
+教訓：**下線一個服務時，「保護它的東西」要跟服務一起下線** ——
+Worker、queue、bucket、DNS、Access app、WAF 規則，缺一個就會留下這種幽靈。
+
 **合併專案至此結案** — 之後的工作都是 ytplayer 自身的演進，不再有跨專案遷移項目。
 
 ## 8. 需要你操作的清單（程式碼做不到的）

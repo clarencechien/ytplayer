@@ -110,6 +110,7 @@ video 路由的影片另有**字卡層**（🃏 疊畫面上緣、逐句稿有�
 | **ext 抓 ucid**（F4）| `chrome://extensions` 重新載入 ext → 送一支片 → 看 `/subs/{id}/source.json` 有沒有 `meta.channelId` | 容器內連不到 YouTube（429／connection reset）—— 與「不做伺服器抓字幕」是同一道牆 |
 | **PWA 手機送片** | 手機開站台 → 加到主畫面 → 用 YouTube 分享或貼連結 → 桌機 popup 看待補佇列 | 需要真手機 |
 | **Managed Challenge** | dashboard 設一條 WAF 規則（運算式與雷區見 [privacy-hardening.md](docs/privacy-hardening.md) §3）| 我沒有 Cloudflare dashboard 權限 |
+| **刪掉 kvsplayer 的 Access application** | Zero Trust → Access → Applications → 刪除 —— 它還在，害 `/admin` 的登入鏈斷在死掉的主機上（[§3.5](docs/privacy-hardening.md)）| 同上 |
 | **劇場模式畫質**（畫質 A 案）| player 頁按 `T` → 看畫質標示有沒有升上去 | 需要真螢幕與真播放器 |
 | **G1 跨影片一致性** | 送同一個頻道的第二支片，看 `glossary.json` 的 `layers.channelKey` 是否命中同一張表 | 手上沒有同頻道的第二支已 ingest 影片 |
 
