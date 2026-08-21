@@ -124,13 +124,18 @@ cron 下一輪即跳過、零 LLM 花費）；`wrangler.jsonc` 的 `triggers.cro
 **教訓**：花錢的迴圈必須有**花費側的保險絲**，不能只靠工作側的鎖 ——
 鎖能防並發，防不了「每次都失敗但每次都全額付費」的重試。嘗試次數上限（第 2 點修法）是硬需求，不是優化。
 
-### 建議的修法（尚未實作）
+### 建議的修法 —— **後來三項都由 Queues 架構解掉了**（2026-08）
 
 1. **分段可續跑**：修稿與翻譯拆成不同 cron 輪次，各自存中繼結果（`sentences.json` 已是天然檢查點），
    單輪工作量減半；kvsplayer 用 Queues 的分段掃描解同一個問題
 2. **鎖要能自我修復**：縮短 stale 門檻，或在鎖裡記錄「第幾次嘗試」，連續失敗時降級（縮小 chunk）
 3. **每階段落地進度**：cron 開工即寫 `last-run.json` 的 `status: running`，才能區分
    「沒被選中」與「選中後死掉」
+
+**現況**：三項都成立了，但不是靠改 cron —— 而是把翻譯拆成 Queues 上的有界小步
+（`plan → repair:N → glossary → translate:N → assemble → patch`），每步做完即落地
+checkpoint；cron 退化成零成本看門狗，只在 `status.updatedAt` 超過 `STALE_MS` 時重排。
+**cron 永不碰 LLM** 現在是硬規則（CLAUDE.md #4）。
 
 ## 5. 決策建議
 
