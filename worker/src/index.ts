@@ -16,8 +16,8 @@
 
 import { validateIngest } from './validate';
 import { retimeCues, type RetimeCue } from './retime';
-import { listVideos, routeSource, toSrt } from './pipeline';
-import { handleJob, watchdog, readDailyBudget, type JobMsg, type MsgLike, type WatchRequest } from './jobs';
+import { listVideos, routeSource, toSrt, countCpsOver } from './pipeline';
+import { handleJob, watchdog, readDailyBudget, type JobMsg, type MsgLike, type PatchMode, type WatchRequest } from './jobs';
 import { watchPage, indexPage, adminPage, sharePage } from './player';
 import {
   turnstileConfigured,
@@ -247,13 +247,17 @@ export default {
           const info = await env.SUBS.get(`subs/${videoId}/info.json`);
           if (info) title = (JSON.parse(await info.text()) as { title?: string }).title;
         }
-        // 舊片的 status.json 沒有 untranslated 欄位（那時還沒這個功能）→ 從 bilingual.json
-        // 回填一次就好，否則儀表板永遠看不到既有影片的未譯句（docs/patch-untranslated.md P2）
-        if (st.untranslated === undefined && st.stage === 'done') {
+        // 舊片的 status.json 沒有 untranslated／cpsOver 欄位（那時還沒這些功能）→ 從 bilingual.json
+        // 回填一次就好，否則儀表板永遠看不到既有影片的問題句
+        //（docs/patch-untranslated.md P2、docs/subtitle-readability.md R4b）
+        if ((st.untranslated === undefined || st.cpsOver === undefined) && st.stage === 'done') {
           const bil = await env.SUBS.get(`subs/${videoId}/bilingual.json`);
           if (bil) {
-            const doc = JSON.parse(await bil.text()) as { cues?: Array<{ untranslated?: boolean }> };
+            const doc = JSON.parse(await bil.text()) as {
+              cues?: Array<{ start: number; end: number; zh: string; untranslated?: boolean }>;
+            };
             st.untranslated = (doc.cues ?? []).filter((c) => c.untranslated).length;
+            st.cpsOver = countCpsOver(doc.cues ?? []);
             await env.SUBS.put(`subs/${videoId}/status.json`, JSON.stringify(st), {
               httpMetadata: { contentType: 'application/json' },
             });
@@ -276,6 +280,8 @@ export default {
           warningCount: Array.isArray(st.warnings) ? st.warnings.length : 0,
           // 未譯句數：使用者不該在看片時才發現（docs/patch-untranslated.md P2）
           untranslated: (st.untranslated as number) ?? 0,
+          // 讀不完的句數：舊片也算得出來，所以事後也修得掉（docs/subtitle-readability.md R4b）
+          cpsOver: (st.cpsOver as number) ?? 0,
           patchRounds: (st.patchRounds as number) ?? 0,
         });
       }
@@ -437,13 +443,19 @@ export default {
       return json({ ok: true, videoId, changed, cueCount: doc.cues.length });
     }
 
-    // 補譯（docs/patch-untranslated.md）：只重譯未譯／原文照抄的那幾句，不重跑整片。
-    // 正常情況 assemble 完會自己排，這個端點是手動補刀（含舊片）。
+    // 補譯（docs/patch-untranslated.md、docs/subtitle-readability.md R4b）：
+    // 只重譯有問題的那幾句，不重跑整片。?mode=untranslated（預設）｜cps｜all
+    // 正常情況 assemble 完會自己排 untranslated，這個端點是手動補刀（含舊片）。
     const pt = path.match(/^\/patch\/([A-Za-z0-9_-]{11})$/);
     if (req.method === 'POST' && pt) {
       if (!authorized) return json({ ok: false, error: 'unauthorized' }, 403);
       if (!env.JOBS) return json({ ok: false, error: 'JOBS queue 未綁定' }, 500);
       const videoId = pt[1];
+      const modeParam = url.searchParams.get('mode') ?? 'untranslated';
+      if (!['untranslated', 'cps', 'all'].includes(modeParam)) {
+        return json({ ok: false, error: 'mode 只能是 untranslated｜cps｜all' }, 400);
+      }
+      const mode = modeParam as PatchMode;
       if (!(await env.SUBS.head(`subs/${videoId}/bilingual.json`))) {
         return json({ ok: false, error: 'bilingual.json 不存在（還沒翻好）' }, 404);
       }
@@ -456,8 +468,8 @@ export default {
           httpMetadata: { contentType: 'application/json' },
         });
       }
-      await env.JOBS.send({ videoId, step: 'patch' });
-      return json({ ok: true, accepted: videoId, note: '補譯已排入，進度看 /subs/{videoId}/status.json' }, 202);
+      await env.JOBS.send({ videoId, step: 'patch', mode });
+      return json({ ok: true, accepted: videoId, mode, note: '補譯已排入，進度看 /subs/{videoId}/status.json' }, 202);
     }
 
     // 手動排入翻譯：非同步（202 即回），進度看 /subs/{id}/status.json

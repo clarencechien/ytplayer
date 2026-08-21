@@ -33,7 +33,8 @@
 
 - 測試：`cd worker && npx vitest run`（162 個，push 前必綠）
 - 手動翻譯：`POST /translate/{id}?force=1`（key：`x-ingest-key`）；A/B 擂台：`&model=…`
-- 補譯未譯句：`POST /patch/{id}`（只重譯未譯／原文照抄的句子，不重跑整片）
+- 補譯：`POST /patch/{id}?mode=untranslated|cps|all`（只重譯有問題的句子，不重跑整片）
+  —— `untranslated`＝未譯／原文照抄（預設，assemble 自動接的那條）；`cps`＝顯示時間讀不完的句子壓短
 - 進度/花費：`/subs/{id}/status.json`、`/admin` 儀表板
 - 部署：merge 到 main → Workers Builds 自動部署（production branch 設定在 CF dashboard）
 

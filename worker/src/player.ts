@@ -760,8 +760,13 @@ function esc(s) { var d = document.createElement("span"); d.textContent = String
 function stCls(j) { return j.failed ? "st-fail" : j.stage === "done" ? "st-done" : j.stage === "paused" ? "st-pause" : "st-run"; }
 function stTxt(j) {
   if (j.failed) return "❌ failed：" + (j.failReason || "");
-  // 未譯句數獨立顯示：這是使用者真的會看到的品質缺口（docs/patch-untranslated.md P2）
-  if (j.stage === "done" && j.untranslated > 0) return "✅ done ⚠ " + j.untranslated + " 句未譯";
+  // 未譯／讀不完的句數獨立顯示：這是使用者真的會看到的品質缺口
+  //（docs/patch-untranslated.md P2、docs/subtitle-readability.md R4b）
+  if (j.stage === "done" && (j.untranslated > 0 || j.cpsOver > 0)) {
+    return "✅ done"
+      + (j.untranslated > 0 ? " ⚠ " + j.untranslated + " 句未譯" : "")
+      + (j.cpsOver > 0 ? " ⏩ " + j.cpsOver + " 句讀不完" : "");
+  }
   if (j.stage === "done") return "✅ done" + (j.warningCount ? "（⚠" + j.warningCount + "）" : "");
   if (j.stage === "paused") return "⏸ " + (j.failReason || "日預算已滿");
   return "▶ " + j.stage + (j.step ? " " + j.step : "");
@@ -787,10 +792,14 @@ function refresh() {
           : Date.now() - Date.parse(j.startedAt);
         return "<tr><td><a class='title' href='/watch/" + j.videoId + "' target='_blank' title='" + esc(j.title) + "'>" + esc(j.title) + "</a><br>" +
           "<span class='hint'>" + j.videoId + "・<a href='/subs/" + j.videoId + "/status.json' target='_blank'>status</a>" +
+          // 零成本的修正鈕永遠顯示（按了最多是沒事發生）；
+          // 花錢的補譯鈕只在真的有目標時出現，而且**按鈕上直接帶數字** ——
+          // 舊片的計數由 /jobs.json 回填，所以事後也修得掉（docs/subtitle-readability.md R4b）
           (j.stage === "done" ? "・<a href='#' onclick='return retime(\\"" + j.videoId + "\\")' title='重算顯示時間軸（chaining，零 LLM 費用、冪等可重按）'>⏱修時間</a>" : "") +
-          // 補譯鈕對所有翻好的 text 路由影片都給（沒東西可補時它會回「沒有需要補譯的句子」）——
-          // 舊片的 status 沒有未譯計數，只在有計數時才顯示等於永遠看不到
-          (j.stage === "done" && j.route !== "video" ? "・<a href='#' onclick='return patch(\\"" + j.videoId + "\\")' title='只重譯未譯／原文照抄的句子（以句計價，不重跑整片）'>✏補譯</a>" : "") +
+          (j.stage === "done" && j.route !== "video" && j.untranslated > 0
+            ? "・<a href='#' onclick='return patch(\\"" + j.videoId + "\\",\\"untranslated\\")' title='只重譯未譯／原文照抄的句子（以句計價，不重跑整片）'>✏補譯 " + j.untranslated + "</a>" : "") +
+          (j.stage === "done" && j.route !== "video" && j.cpsOver > 0
+            ? "・<a href='#' onclick='return patch(\\"" + j.videoId + "\\",\\"cps\\")' title='把顯示時間讀不完的句子重譯成更短的說法（以句計價；壓不下去就保留原譯）'>📏壓縮 " + j.cpsOver + "</a>" : "") +
           "</span></td>" +
           "<td>" + esc(j.route || "") + "</td>" +
           "<td class='" + stCls(j) + "'>" + esc(stTxt(j)) + "</td>" +
@@ -820,13 +829,16 @@ function retime(id) {
   return false;
 }
 
-// 補譯鈕：只重譯未譯／原文照抄的句子（docs/patch-untranslated.md）
-function patch(id) {
-  fetch("/patch/" + id, { method: "POST", headers: headers() })
+// 補譯鈕：只重譯有問題的句子（docs/patch-untranslated.md、docs/subtitle-readability.md R4b）
+// mode=untranslated 補未譯／原文照抄；mode=cps 壓縮讀不完的句子
+function patch(id, mode) {
+  var m = mode || "untranslated";
+  var label = m === "cps" ? "📏 " : "✏ ";
+  fetch("/patch/" + id + "?mode=" + m, { method: "POST", headers: headers() })
     .then(function (r) { return r.json(); })
     .then(function (d) {
       document.getElementById("jerr").textContent = d.ok
-        ? "✏ " + id + "：補譯已排入，十幾秒後看狀態變化"
+        ? label + id + "：" + (m === "cps" ? "壓縮" : "補譯") + "已排入，十幾秒後看狀態變化"
         : "補譯失敗：" + (d.error || "");
       setTimeout(refresh, 8000);
     })

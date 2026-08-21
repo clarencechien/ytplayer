@@ -57,6 +57,11 @@ import {
 } from './watch';
 
 export type JobStep = 'plan' | 'repair' | 'glossary' | 'translate' | 'watch' | 'assemble' | 'patch';
+// 補譯要修哪一種毛病（docs/subtitle-readability.md R4b）：
+//   untranslated = 未譯／原文照抄（預設，assemble 自動接的那條）
+//   cps          = 顯示時間讀不完，重譯成更短的說法
+//   all          = 兩種一起（同一次 LLM 呼叫，省一趟）
+export type PatchMode = 'untranslated' | 'cps' | 'all';
 export interface JobMsg {
   videoId: string;
   step: JobStep;
@@ -64,6 +69,7 @@ export interface JobMsg {
   force?: boolean;
   route?: 'video'; // plan 專用：走看片路線（無此欄位 = text）
   model?: string; // plan 專用：本輪模型覆寫（A/B 測試用；整輪固定，記在 status.modelOverride）
+  mode?: PatchMode; // patch 專用
 }
 
 // 一個 queue 批次步驟最多帶幾個 chunk（chunk=40 句）：4×40=160 句、併發 4，約 1–2 分鐘
@@ -934,11 +940,19 @@ interface BilingualDoc {
   meta: PromptMeta;
   warnings: string[];
   hints: string[];
-  cues: Array<{ orig: string; zh: string; untranslated?: boolean; note?: string; [k: string]: unknown }>;
+  cues: Array<{ start: number; end: number; orig: string; zh: string; untranslated?: boolean; note?: string; [k: string]: unknown }>;
   [k: string]: unknown;
 }
 
-async function patchStep(env: JobEnv, videoId: string, llmOverride?: LlmFn): Promise<StepResult> {
+// 顯示時間讀不完（R4b 的目標偵測）—— 與 countCpsOver 同一把尺
+const exceedsCps = (c: { start: number; end: number; zh: string; untranslated?: boolean }): boolean =>
+  !c.untranslated && c.end > c.start && c.zh.length / (c.end - c.start) > CPS_TARGET;
+
+// 用**實際顯示時間**算字數上限（比翻譯當下的預估更準：retime 已經跑過了）
+const cueBudget = (c: { start: number; end: number }): number =>
+  Math.min(32, Math.max(8, Math.round((c.end - c.start) * CPS_TARGET)));
+
+async function patchStep(env: JobEnv, videoId: string, mode: PatchMode = 'untranslated', llmOverride?: LlmFn): Promise<StepResult> {
   const st = await jsonGet<JobStatus>(env, statusKey(videoId));
   const doc = await jsonGet<BilingualDoc>(env, `subs/${videoId}/bilingual.json`);
   if (!st || !doc) return { status: 404, body: { ok: false, error: 'status 或 bilingual.json 不存在' } };
@@ -950,14 +964,21 @@ async function patchStep(env: JobEnv, videoId: string, llmOverride?: LlmFn): Pro
     return { status: 409, body: { ok: false, error: 'sentences.json 與 bilingual 對不起來，請改用 ?force=1 重翻' } };
   }
 
-  // 目標偵測全 deterministic（開發原則 #1）：未譯旗標 or 原文照抄
+  // 目標偵測全 deterministic（開發原則 #1）。兩種偵測器共用同一套補譯機制：
+  //   untranslated = 未譯旗標／原文照抄　　cps = 顯示時間讀不完（docs/subtitle-readability.md R4b）
+  const wantUn = mode !== 'cps';
+  const wantCps = mode !== 'untranslated';
+  const isTarget = (s: Sentence, c: BilingualDoc['cues'][number]): boolean =>
+    (wantUn && needsRetranslate(s.text, c.zh, c.untranslated)) || (wantCps && exceedsCps(c));
+
   const targets = doc.cues
     .map((c, i) => ({ i, s: sentencesDoc.sentences[i], c }))
-    .filter(({ s, c }) => needsRetranslate(s.text, c.zh, c.untranslated));
+    .filter(({ s, c }) => isTarget(s, c));
   if (targets.length === 0) {
-    st.untranslated = 0;
+    if (wantUn) st.untranslated = 0;
+    if (wantCps) st.cpsOver = 0;
     await writeStatus(env, st);
-    return { status: 200, body: { ok: true, patched: 0, note: '沒有需要補譯的句子' } };
+    return { status: 200, body: { ok: true, patched: 0, mode, note: '沒有需要補譯的句子' } };
   }
 
   const meter: StepMeter = newMeter();
@@ -972,26 +993,39 @@ async function patchStep(env: JobEnv, videoId: string, llmOverride?: LlmFn): Pro
     llm,
     doc.meta,
     glossaryDoc?.glossary ?? [],
-    { before: ctx(first, 2), target: picked.map((t) => t.s), after: all.slice(last + 1, last + 3) },
+    {
+      before: ctx(first, 2),
+      // 壓縮模式要把字數上限一起送進 prompt —— 不然模型不知道要壓多短（R1 同一套機制）
+      target: picked.map((t) => (wantCps ? { ...t.s, budget: cueBudget(t.c) } : t.s)),
+      after: all.slice(last + 1, last + 3),
+    },
     doc.sourceLang
   );
 
   let patched = 0;
-  for (const { i, s } of picked) {
+  for (const { i, s, c } of picked) {
     const v = outcome.byId.get(s.id);
     if (!v) continue;
+    // 壓縮模式：改出來更長就不換 —— 重譯不該讓情況變糟
+    if (wantCps && !c.untranslated && v.zh.length >= c.zh.length && !needsRetranslate(s.text, c.zh, c.untranslated)) continue;
     doc.cues[i] = { ...doc.cues[i], zh: v.zh, ...(v.note ? { note: v.note } : {}) };
     delete doc.cues[i].untranslated;
     patched++;
   }
 
-  const left = doc.cues.filter((c, i) => needsRetranslate(sentencesDoc.sentences[i].text, c.zh, c.untranslated)).length;
+  const leftUn = doc.cues.filter((c, i) => needsRetranslate(sentencesDoc.sentences[i].text, c.zh, c.untranslated)).length;
+  const leftCps = doc.cues.filter(exceedsCps).length;
+  const left = mode === 'cps' ? leftCps : leftUn;
   // warnings 重寫：舊的「N 句翻譯失敗」已經不準了，留著只會誤導
   doc.warnings = [
     ...doc.warnings.filter((w) => !/句翻譯失敗/.test(w)),
-    ...(left > 0 ? [`${left} 句翻譯失敗，以原文代替（標 untranslated，已補譯 ${st.patchRounds ?? 0 + 1} 輪）`] : []),
+    ...(leftUn > 0 ? [`${leftUn} 句翻譯失敗，以原文代替（標 untranslated，已補譯 ${(st.patchRounds ?? 0) + 1} 輪）`] : []),
   ];
-  doc.hints = [...doc.hints.filter((h) => !/補譯/.test(h)), `補譯：${patched} 句已補回${left > 0 ? `，仍有 ${left} 句補不動` : ''}`];
+  doc.hints = [
+    ...doc.hints.filter((h) => !/補譯|字\/秒/.test(h)),
+    `補譯（${mode}）：${patched} 句已改寫${left > 0 ? `，仍有 ${left} 句沒解決` : ''}`,
+    ...(leftCps > 0 ? [`${leftCps} 句超過 ${CPS_TARGET} 字/秒（顯示時間可能讀不完）`] : []),
+  ];
   await jsonPut(env, `subs/${videoId}/bilingual.json`, doc);
   await env.SUBS.put(
     `subs/${videoId}/bilingual.srt`,
@@ -1000,13 +1034,15 @@ async function patchStep(env: JobEnv, videoId: string, llmOverride?: LlmFn): Pro
   );
 
   st.patchRounds = (st.patchRounds ?? 0) + 1;
-  st.untranslated = left;
+  st.untranslated = leftUn;
+  st.cpsOver = leftCps;
   await settle(env, st, meter, outcome.retries);
   return {
     status: 200,
-    body: { ok: true, patched, left, round: st.patchRounds },
-    // 還有剩且沒到上限就再來一輪（每輪都是以句計價，不是重跑整片）
-    next: left > 0 && st.patchRounds < MAX_PATCH_ROUNDS ? { videoId, step: 'patch' } : undefined,
+    body: { ok: true, mode, patched, left, leftUntranslated: leftUn, leftCps, round: st.patchRounds },
+    // 只有「未譯」值得再來一輪；**壓縮不重試** —— 壓不下去的句子再壓一次只是多花錢
+    //（原譯文本來就可用，只是讀起來趕；docs/subtitle-readability.md §3）
+    next: mode !== 'cps' && leftUn > 0 && st.patchRounds < MAX_PATCH_ROUNDS ? { videoId, step: 'patch', mode } : undefined,
   };
 }
 
@@ -1034,7 +1070,7 @@ export async function runStep(
     case 'assemble':
       return assembleStep(env, msg.videoId);
     case 'patch':
-      return patchStep(env, msg.videoId, llmOverride);
+      return patchStep(env, msg.videoId, msg.mode ?? 'untranslated', llmOverride);
   }
 }
 

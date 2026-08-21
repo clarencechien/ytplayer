@@ -168,6 +168,83 @@ describe('runPipeline（in-process 整合）', () => {
     expect((readJson(SUBS, 'subs/ksfm6jeTg3Q/status.json') as JobStatus).untranslated).toBe(0);
   });
 
+  // R4b（docs/subtitle-readability.md）：已經翻好的舊片也要修得掉 ——
+  // 品質改善若沒有事後套用路徑，等於只對「之後的新片」有效（CLAUDE.md 硬規則 #8）
+  describe('壓縮補譯 mode=cps', () => {
+    const longLlm = async (prompt: string): Promise<string> => {
+      if (prompt.includes('術語編輯')) return '[]';
+      const ids = [...prompt.matchAll(/^(\d+): /gm)].map((m) => Number(m[1]));
+      return JSON.stringify(ids.map((id) => ({ id, zh: `這是一句刻意寫得又臭又長、顯示時間根本讀不完的中文字幕第${id}句。` })));
+    };
+    const seedLongVideo = async (): Promise<FakeR2> => {
+      const SUBS = new FakeR2();
+      await SUBS.put('subs/ksfm6jeTg3Q/source.json', JSON.stringify(makeSource()));
+      const r = await runPipeline(envOf(SUBS), 'ksfm6jeTg3Q', false, longLlm);
+      expect(r.status).toBe(200);
+      // assemble 只自動接「未譯」那條；讀不完不自動花錢重譯，等使用者按鈕
+      expect((readJson(SUBS, 'subs/ksfm6jeTg3Q/status.json') as JobStatus).cpsOver).toBeGreaterThan(0);
+      expect((readJson(SUBS, 'subs/ksfm6jeTg3Q/status.json') as JobStatus).patchRounds ?? 0).toBe(0);
+      return SUBS;
+    };
+
+    it('把讀不完的句子重譯成短的：cpsOver 歸零、時間軸不動、prompt 帶字數上限', async () => {
+      const SUBS = await seedLongVideo();
+      const before = readJson(SUBS, 'subs/ksfm6jeTg3Q/bilingual.json');
+      const prompts: string[] = [];
+      const shortLlm = async (prompt: string): Promise<string> => {
+        prompts.push(prompt);
+        const ids = [...prompt.matchAll(/^(\d+): /gm)].map((m) => Number(m[1]));
+        return JSON.stringify(ids.map((id) => ({ id, zh: `短句${id}。` })));
+      };
+      const overBefore = (readJson(SUBS, 'subs/ksfm6jeTg3Q/status.json') as JobStatus).cpsOver!;
+      const r = await runStep(envOf(SUBS), { videoId: 'ksfm6jeTg3Q', step: 'patch', mode: 'cps' }, shortLlm);
+      expect(r.status).toBe(200);
+      expect(r.body).toMatchObject({ mode: 'cps', patched: overBefore, leftCps: 0 });
+      expect(r.next).toBeUndefined(); // 壓縮不重試：壓不下去的句子再壓一次只是多花錢
+
+      // 字數上限真的送進 prompt（沒送 = 模型不知道要壓多短，等於白花錢）
+      expect(prompts[0]).toMatch(/^\d+: \[≤\d+ 字\] /m);
+      const after = readJson(SUBS, 'subs/ksfm6jeTg3Q/bilingual.json');
+      // 只改讀不完的那幾句：其餘原譯文一字不動（重譯是有代價的，不該順手全片重寫）
+      expect(after.cues[0].zh).toBe('短句0。');
+      expect(after.cues.filter((c: { zh: string }) => /^短句/.test(c.zh))).toHaveLength(overBefore);
+      expect(after.cues.map((c: { start: number; end: number }) => [c.start, c.end])).toEqual(
+        before.cues.map((c: { start: number; end: number }) => [c.start, c.end])
+      );
+      expect(SUBS.store.get('subs/ksfm6jeTg3Q/bilingual.srt')!.value).toContain('短句0。');
+      const st = readJson(SUBS, 'subs/ksfm6jeTg3Q/status.json') as JobStatus;
+      expect(st.cpsOver).toBe(0);
+      expect(st.untranslated).toBe(0); // 壓縮不該把好句子弄成未譯
+    });
+
+    it('壓出來更長就不換：重譯不該讓情況變糟', async () => {
+      const SUBS = await seedLongVideo();
+      const before = readJson(SUBS, 'subs/ksfm6jeTg3Q/bilingual.json');
+      const longerLlm = async (prompt: string): Promise<string> => {
+        const ids = [...prompt.matchAll(/^(\d+): /gm)].map((m) => Number(m[1]));
+        return JSON.stringify(ids.map((id) => ({ id, zh: `${'更'.repeat(60)}長第${id}句。` })));
+      };
+      const r = await runStep(envOf(SUBS), { videoId: 'ksfm6jeTg3Q', step: 'patch', mode: 'cps' }, longerLlm);
+      expect(r.body).toMatchObject({ patched: 0 });
+      const after = readJson(SUBS, 'subs/ksfm6jeTg3Q/bilingual.json');
+      expect(after.cues.map((c: { zh: string }) => c.zh)).toEqual(before.cues.map((c: { zh: string }) => c.zh));
+    });
+
+    it('mode=cps 不碰未譯句；沒有目標時直接回 0 且不呼叫模型', async () => {
+      const SUBS = new FakeR2();
+      await SUBS.put('subs/ksfm6jeTg3Q/source.json', JSON.stringify(makeSource()));
+      await runPipeline(envOf(SUBS), 'ksfm6jeTg3Q', false, fakeLlm); // 「中文N。」很短，沒有讀不完的句子
+      let called = 0;
+      const spy = async (p: string): Promise<string> => {
+        called++;
+        return fakeLlm(p);
+      };
+      const r = await runStep(envOf(SUBS), { videoId: 'ksfm6jeTg3Q', step: 'patch', mode: 'cps' }, spy);
+      expect(r.body).toMatchObject({ ok: true, patched: 0, mode: 'cps' });
+      expect(called).toBe(0);
+    });
+  });
+
   it('只有標點的句子（「。」）不送模型、也不算未譯', async () => {
     const SUBS = new FakeR2();
     const src = makeSource();
