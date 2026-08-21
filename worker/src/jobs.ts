@@ -987,6 +987,7 @@ async function patchStep(env: JobEnv, videoId: string, mode: PatchMode = 'untran
   const ctx = (i: number, d: number): Sentence[] => all.slice(Math.max(0, i - d), i);
   // 一次最多補 40 句（更多代表整片有問題，該重翻而不是補）
   const picked = targets.slice(0, 40);
+  const truncated = targets.length > picked.length; // 被 40 上限切掉 ≠ 補不動，兩者的續接條件不同
   const first = picked[0].i;
   const last = picked[picked.length - 1].i;
   const outcome = await translateChunk(
@@ -1039,10 +1040,15 @@ async function patchStep(env: JobEnv, videoId: string, mode: PatchMode = 'untran
   await settle(env, st, meter, outcome.retries);
   return {
     status: 200,
-    body: { ok: true, mode, patched, left, leftUntranslated: leftUn, leftCps, round: st.patchRounds },
-    // 只有「未譯」值得再來一輪；**壓縮不重試** —— 壓不下去的句子再壓一次只是多花錢
-    //（原譯文本來就可用，只是讀起來趕；docs/subtitle-readability.md §3）
-    next: mode !== 'cps' && leftUn > 0 && st.patchRounds < MAX_PATCH_ROUNDS ? { videoId, step: 'patch', mode } : undefined,
+    body: { ok: true, mode, patched, left, leftUntranslated: leftUn, leftCps, truncated, round: st.patchRounds },
+    // 續接的兩種理由要分清楚：
+    //   未譯 —— 值得再試一次（模型第二次常常就給得出來）
+    //   壓縮 —— **壓不動的不重試**（原譯文本來就可用，只是讀起來趕；§3），
+    //           但「被 40 句上限切掉」是另一回事：那是還沒輪到，不是失敗，該接著做完
+    next:
+      st.patchRounds < MAX_PATCH_ROUNDS && ((wantUn && leftUn > 0) || (wantCps && truncated && patched > 0))
+        ? { videoId, step: 'patch', mode }
+        : undefined,
   };
 }
 

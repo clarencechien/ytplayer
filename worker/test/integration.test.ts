@@ -230,6 +230,44 @@ describe('runPipeline（in-process 整合）', () => {
       expect(after.cues.map((c: { zh: string }) => c.zh)).toEqual(before.cues.map((c: { zh: string }) => c.zh));
     });
 
+    // 「被 40 句上限切掉」不是「補不動」—— 前者該接著做完，否則按鈕寫 49 卻只修 40，
+    // 使用者看不出差別（實測 hK9fypJKHyY 就是 49 句）
+    it('超過一次上限 40 句時自動接著補完，而不是靜靜地只修 40 句', async () => {
+      const SUBS = new FakeR2();
+      const src = makeSource();
+      src.cues = Array.from({ length: 45 }, (_, i) => ({ start: i * 2, dur: 1, text: `Sentence ${i} here.` }));
+      await SUBS.put('subs/ksfm6jeTg3Q/source.json', JSON.stringify(src));
+      await runPipeline(envOf(SUBS), 'ksfm6jeTg3Q', false, longLlm);
+      // 最後一句的顯示時間會被 retime 拉長，所以是 44 而不是 45
+      const overBefore = (readJson(SUBS, 'subs/ksfm6jeTg3Q/status.json') as JobStatus).cpsOver!;
+      expect(overBefore).toBeGreaterThan(40);
+
+      const shortLlm = async (prompt: string): Promise<string> => {
+        const ids = [...prompt.matchAll(/^(\d+): /gm)].map((m) => Number(m[1]));
+        return JSON.stringify(ids.map((id) => ({ id, zh: `短句${id}。` })));
+      };
+      const env = envOf(SUBS);
+      const r1 = await runStep(env, { videoId: 'ksfm6jeTg3Q', step: 'patch', mode: 'cps' }, shortLlm);
+      expect(r1.body).toMatchObject({ patched: 40, truncated: true });
+      expect(r1.next).toEqual({ videoId: 'ksfm6jeTg3Q', step: 'patch', mode: 'cps' });
+
+      const r2 = await runStep(env, r1.next!, shortLlm);
+      expect(r2.body).toMatchObject({ patched: overBefore - 40, truncated: false, leftCps: 0 });
+      expect(r2.next).toBeUndefined();
+      expect((readJson(SUBS, 'subs/ksfm6jeTg3Q/status.json') as JobStatus).cpsOver).toBe(0);
+    });
+
+    it('壓不動時不續接：只有「還沒輪到」值得再排一輪，重試壓不動的句子只是多花錢', async () => {
+      const SUBS = await seedLongVideo();
+      const sameLlm = async (prompt: string): Promise<string> => {
+        const ids = [...prompt.matchAll(/^(\d+): /gm)].map((m) => Number(m[1]));
+        return JSON.stringify(ids.map((id) => ({ id, zh: `這是一句刻意寫得又臭又長、顯示時間根本讀不完的中文字幕第${id}句。` })));
+      };
+      const r = await runStep(envOf(SUBS), { videoId: 'ksfm6jeTg3Q', step: 'patch', mode: 'cps' }, sameLlm);
+      expect(r.body).toMatchObject({ patched: 0, truncated: false });
+      expect(r.next).toBeUndefined();
+    });
+
     it('mode=cps 不碰未譯句；沒有目標時直接回 0 且不呼叫模型', async () => {
       const SUBS = new FakeR2();
       await SUBS.put('subs/ksfm6jeTg3Q/source.json', JSON.stringify(makeSource()));
