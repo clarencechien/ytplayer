@@ -49,30 +49,37 @@
 塞進 CPS 上限，Netflix 明文預期譯者這樣做。而這件事**模型完全做得到** ——
 它缺的只是「這句有幾秒」這個資訊，而我們手上就有。
 
-### 設計
+### 設計（實際落地的版本）
 
 ```ts
-// segment.ts 的 Sentence 在詞級斷句時自帶 start/end
-const budget = clamp(Math.round((s.end - s.start) * 9), 8, 32);
-// prompt 每句標上：  12 (≤14 字): I think it is a very good option for a
+// 視窗 = retime 之後真正看得到的時間（延伸到下一句開始，上限 +3 秒）
+const window = clamp(min(next.start - s.start - 0.05, dur + 3), 1, ∞);
+const budget = clamp(round(window * 12), 8, 32);
+// 只在 budget < 24 時標註：  0: [≤14 字] I think it is a very good option
 ```
 
-- **9 CPS** 直接取規範上限（我們的目標是「讀得完」，不是「輕鬆讀」）
+- **12 CPS 而不是規範的 9** —— 這是量出來的決定：全庫 2217 句的 CPS 中位數只有 4.2，
+  用 9 當預算會對 **38%** 的句子下約束（其中九成本來就沒問題）。12 只碰 21%，
+  而 Netflix 的 9 是「看戲」標準，我們的使用者在讀字幕學語言、還能暫停倒帶
+- 視窗要**鏡射 `retimeCues`**：用語音長度算會低估預算、把譯文壓得比需要的更短
 - 下限 8：太短的預算會逼出不自然的電報體
 - 上限 32 = 2 行 × 16 字：再長就是 R2 的責任
-- **只在時間可靠時給**：詞級斷句（`segs`）算出來的 start/end 才準；
-  video 路由的時間軸是模型估的，**不給預算**（假的預算比沒有更糟）
+- 預算 ≥24 字就不標註：模型本來就不會寫那麼長，標了只是雜訊
+- **時間不可靠就不給**：video 路由的時間軸是模型估的（假的預算比沒有更糟）。
+  ⚠ 原本這條寫成「只有詞級斷句才給」—— 太嚴了，**cue 邊界是 YouTube 給的真實時間**，
+  照樣可用（這個錯誤讓第一輪 A/B 白跑，見 §3.1）
 
 ### 為什麼不「超標就重譯」
 
 超標的句子重譯一次要多付一次 API —— 而它**本來就已經是可用的譯文**，只是讀起來趕。
-沿用既有原則：`hints` 記下來讓它可見（`N 句超過 9 CPS`），不自動花錢修。
+沿用既有原則：`hints` 記下來讓它可見（`N 句超過 12 字/秒`），不自動花錢修。
 真的想修，`/patch` 已經是現成的手動工具。
 
 ### 驗收 Gate
 
-1. 先量自然變異（同設定 3 次，記 CPS > 9 的句數）—— 照 [model-reeval-sop.md](model-reeval-sop.md)
-2. 加預算後 CPS > 9 的句數**顯著低於**基準分布
+1. 先量自然變異（同設定 3 次，記 CPS > 12 的句數）—— 照 [model-reeval-sop.md](model-reeval-sop.md)
+2. 加預算後 CPS > 12 的句數**顯著低於**基準分布
+2.5 **確認功能真的有啟動**（`標了預算=N` 不能是 0）—— 這條是用 NT$33 買來的
 3. `untranslated` 不增加；tokens 增幅 < 5%（prompt 只多幾個字元）
 4. **抽樣 10 句人工比對**（不可省）：確認模型是「砍冗詞」而不是「砍語意」——
    這是本項最大的風險，自動指標測不到
@@ -261,7 +268,7 @@ R1–R3 只影響「之後翻的片」，但**手上的片都已經翻好了**�
 
 ```ts
 // 現在：needsRetranslate(orig, zh, untranslated)   → 未譯／原文照抄
-// 加上：exceedsCps(zh, start, end)                 → 字數 / 秒數 > 9
+// 加上：exceedsCps(zh, start, end)                 → 字數 / 秒數 > 12（countCpsOver 已經寫好）
 POST /patch/{id}?mode=untranslated|cps|all
 ```
 
