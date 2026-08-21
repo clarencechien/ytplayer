@@ -77,10 +77,12 @@ Caption track 有四個層級，每層是不同的題目（詳見 [docs/handoff-
   （[docs/patch-untranslated.md](docs/patch-untranslated.md)）
 - **字幕閱讀速度**：顯示時間換算成字數上限寫進 prompt（12 字/秒），讓模型自己壓縮 ——
   實測讀不完的句子少 29%、成本不變、沒被標的句子完全不動。
-  舊片走 `/admin` 的 **📏壓縮** 鈕事後套用（只重譯超標那幾句；壓出來更長就不換）
+  舊片走 `/admin` 的 **📏壓縮** 鈕事後套用（只重譯超標那幾句；壓出來更長就不換）。
+  壓縮前先**零成本剝掉英文夾註**（`原廠（First-party）追蹤器`→`原廠追蹤器`）——
+  實測 hK9fypJKHyY 11→7、kCIvgJklMWQ 16→11 句不必送模型
   （[docs/subtitle-readability.md](docs/subtitle-readability.md) §3.1、§6；`CPS_BUDGET=off` 可關）
 
-prompt 目前 **v6**；worker 測試 **165 個**。品質防線與所有實證教訓見
+prompt 目前 **v6**；worker 測試 **175 個**。品質防線與所有實證教訓見
 **[docs/lessons-learned.md](docs/lessons-learned.md)**；合併決策材料見
 [docs/kvsplayer-merge-todo.md](docs/kvsplayer-merge-todo.md)。
 

@@ -268,6 +268,64 @@ describe('runPipeline（in-process 整合）', () => {
       expect(r.next).toBeUndefined();
     });
 
+    // 耗時 = 開翻到翻完。事後補譯會推進 updatedAt，但不該把這支片的耗時撐大
+    //（不然幾天後按一次按鈕就顯示「跑了 7229 分鐘」，看起來像失控燒錢）
+    it('事後壓縮推進 updatedAt，但 doneAt 不動 —— 耗時不該被按鈕撐大', async () => {
+      const SUBS = await seedLongVideo();
+      const st0 = readJson(SUBS, 'subs/ksfm6jeTg3Q/status.json') as JobStatus;
+      expect(st0.doneAt).toBeTruthy();
+      expect(readJson(SUBS, 'subs/ksfm6jeTg3Q/bilingual.json').generatedAt).toBe(st0.doneAt);
+
+      const shortLlm = async (prompt: string): Promise<string> => {
+        const ids = [...prompt.matchAll(/^(\d+): /gm)].map((m) => Number(m[1]));
+        return JSON.stringify(ids.map((id) => ({ id, zh: `短句${id}。` })));
+      };
+      await runStep(envOf(SUBS), { videoId: 'ksfm6jeTg3Q', step: 'patch', mode: 'cps' }, shortLlm);
+      const st1 = readJson(SUBS, 'subs/ksfm6jeTg3Q/status.json') as JobStatus;
+      expect(st1.doneAt).toBe(st0.doneAt);
+      expect(Date.parse(st1.updatedAt)).toBeGreaterThanOrEqual(Date.parse(st1.doneAt!));
+    });
+
+    // R5（docs/subtitle-readability.md §3.2）：deterministic 的修法要排在花錢的修法前面
+    it('剝夾註就達標的句子完全不送模型（零 LLM，錢省下來）', async () => {
+      const SUBS = new FakeR2();
+      await SUBS.put('subs/ksfm6jeTg3Q/source.json', JSON.stringify(makeSource()));
+      const glossLlm = async (prompt: string): Promise<string> => {
+        if (prompt.includes('術語編輯')) return '[]';
+        const ids = [...prompt.matchAll(/^(\d+): /gm)].map((m) => Number(m[1]));
+        return JSON.stringify(ids.map((id) => ({ id, zh: `簡短譯文${id}（Some English Gloss Text）` })));
+      };
+      await runPipeline(envOf(SUBS), 'ksfm6jeTg3Q', false, glossLlm);
+      const overBefore = (readJson(SUBS, 'subs/ksfm6jeTg3Q/status.json') as JobStatus).cpsOver!;
+      expect(overBefore).toBeGreaterThan(0);
+
+      let called = 0;
+      const spy = async (p: string): Promise<string> => {
+        called++;
+        return glossLlm(p);
+      };
+      const r = await runStep(envOf(SUBS), { videoId: 'ksfm6jeTg3Q', step: 'patch', mode: 'cps' }, spy);
+      expect(called).toBe(0); // 這才是重點：一毛錢都沒花
+      expect(r.body).toMatchObject({ stripped: overBefore, patched: 0, leftCps: 0 });
+
+      const after = readJson(SUBS, 'subs/ksfm6jeTg3Q/bilingual.json');
+      expect(after.cues[0].zh).toBe('簡短譯文0');
+      expect(after.hints.some((h: string) => /剝掉 \d+ 句的英文夾註/.test(h))).toBe(true);
+      expect(SUBS.store.get('subs/ksfm6jeTg3Q/bilingual.srt')!.value).toContain('簡短譯文0');
+      expect((readJson(SUBS, 'subs/ksfm6jeTg3Q/status.json') as JobStatus).cpsOver).toBe(0);
+    });
+
+    it('剝完仍超標的才送模型，而且模型把夾註加回來也會再被剝掉', async () => {
+      const SUBS = await seedLongVideo(); // 譯文很長且沒有夾註 → 剝不動，一定得送模型
+      const reglossLlm = async (prompt: string): Promise<string> => {
+        const ids = [...prompt.matchAll(/^(\d+): /gm)].map((m) => Number(m[1]));
+        return JSON.stringify(ids.map((id) => ({ id, zh: `短句${id}（Short Sentence ${id}）` })));
+      };
+      const r = await runStep(envOf(SUBS), { videoId: 'ksfm6jeTg3Q', step: 'patch', mode: 'cps' }, reglossLlm);
+      expect(r.body).toMatchObject({ stripped: 0 });
+      expect(readJson(SUBS, 'subs/ksfm6jeTg3Q/bilingual.json').cues[0].zh).toBe('短句0');
+    });
+
     it('mode=cps 不碰未譯句；沒有目標時直接回 0 且不呼叫模型', async () => {
       const SUBS = new FakeR2();
       await SUBS.put('subs/ksfm6jeTg3Q/source.json', JSON.stringify(makeSource()));

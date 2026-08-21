@@ -13,6 +13,7 @@ import {
   needsRetranslate,
   charBudget,
   countCpsOver,
+  stripGloss,
   assembleBilingual,
   attachGlossaryNotes,
   toSrt,
@@ -58,6 +59,37 @@ describe('cleanJson 物件級救援（docs/patch-untranslated.md P0-a）', () =>
 
   it('真的什麼都撿不到才丟錯', () => {
     expect(() => cleanJson('完全不是 JSON')).toThrow();
+  });
+});
+
+// R5（docs/subtitle-readability.md §3.2）：夾註是「原文行 + note 欄位」之外的第三份重複，
+// 在 1.5 秒的 cue 裡卻能吃掉一半的字數預算
+describe('剝英文夾註 stripGloss（R5）', () => {
+  it('拿掉含拉丁字母的括號夾註', () => {
+    expect(stripGloss('精準追蹤（Precision tracking）的範圍')).toBe('精準追蹤的範圍');
+    expect(stripGloss('CR2032 鈕扣電池（CR2032 coin cell battery），這')).toBe('CR2032 鈕扣電池，這');
+    expect(stripGloss('IP67 防塵防水等級（IP67 rating），規格跟 AirTag')).toBe('IP67 防塵防水等級，規格跟 AirTag');
+    expect(stripGloss('半形括號 (First-party) 也算')).toBe('半形括號 也算');
+  });
+
+  it('括號裡沒有拉丁字母就不動 —— 那是說明，不是重複', () => {
+    expect(stripGloss('他笑了（笑）')).toBe('他笑了（笑）');
+    expect(stripGloss('用尋找裝置（尋找我的裝置）功能')).toBe('用尋找裝置（尋找我的裝置）功能');
+    expect(stripGloss('完全沒有括號的句子')).toBe('完全沒有括號的句子');
+  });
+
+  it('整句只有夾註就原樣保留（剝完變空字串等於毀掉字幕）', () => {
+    expect(stripGloss('（Google Pixel）')).toBe('（Google Pixel）');
+  });
+
+  it('夾註在句首時不留下孤兒逗號', () => {
+    expect(stripGloss('（Made by Google），今天登場')).toBe('今天登場');
+  });
+
+  it('連續呼叫結果一致（全域 regex 的 lastIndex 陷阱）', () => {
+    const z = '追蹤器（Tracker）上市';
+    expect(stripGloss(z)).toBe(stripGloss(z));
+    expect(stripGloss(z)).toBe('追蹤器上市');
   });
 });
 
