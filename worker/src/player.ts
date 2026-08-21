@@ -756,6 +756,12 @@ function fmtDur(ms) {
   var m = Math.floor(ms / 60000), s = Math.round(ms % 60000 / 1000);
   return m ? m + "分" + (s ? s + "秒" : "") : s + "秒";
 }
+// 更新於：日期一行、時間一行。只印時間的話，八月十六號翻的片會看起來像今天剛跑完
+function fmtWhen(iso) {
+  if (!iso) return "—";
+  var d = new Date(iso);
+  return esc(d.toLocaleDateString()) + "<br><span class='hint'>" + esc(d.toLocaleTimeString()) + "</span>";
+}
 function esc(s) { var d = document.createElement("span"); d.textContent = String(s == null ? "" : s); return d.innerHTML; }
 function stCls(j) { return j.failed ? "st-fail" : j.stage === "done" ? "st-done" : j.stage === "paused" ? "st-pause" : "st-run"; }
 function stTxt(j) {
@@ -809,7 +815,7 @@ function refresh() {
           (j.thoughtTokens > 0 ? "<br><span class='hint'>思考 " + j.thoughtTokens.toLocaleString() + "</span>" : "") + "</td>" +
           "<td class='num'>" + (j.estNTD || 0) + "</td>" +
           "<td class='num'>" + fmtDur(elapsed) + "</td>" +
-          "<td class='num'>" + (j.updatedAt ? new Date(j.updatedAt).toLocaleTimeString() : "—") + "</td></tr>";
+          "<td class='num'>" + fmtWhen(j.updatedAt) + "</td></tr>";
       });
       document.getElementById("rows").innerHTML = rows.join("") || "<tr><td colspan='7' class='hint'>還沒有任何任務</td></tr>";
     })
