@@ -42,11 +42,20 @@
 | GET | `/subs/{videoId}/{file}` | 公開 | `source/sentences/glossary/bilingual/info/status.json`、`bilingual.srt` |
 | GET | `/health` | 公開 | 狀態（`ingestKeyConfigured` 要是 `true`） |
 | GET | `/robots.txt` | 公開 | 允許抓取（全站另有 `X-Robots-Tag: noindex` — 擋爬會讓 noindex 看不見） |
+| GET | `/admin` | Access | 儀表板：任務狀態、今日花費、看片路線送片、每列的修正按鈕 |
+| GET | `/jobs.json` | **key** | 儀表板資料（順便回填舊片缺的 `untranslated`／`cpsOver`／`doneAt`）|
+| GET | `/share`、`/manifest.webmanifest`、`/sw.js` | 公開 | PWA（手機分享送片） |
+| GET/POST/DELETE | `/inbox*` | key | 手機送片的待補佇列（桌機 ext 補收後銷帳）|
 | POST | `/ingest` | key | 收 ext payload，存 source 並**直接排入翻譯佇列** |
 | POST | `/translate/{videoId}` | key | 手動排入佇列（202 ack，進度看 `status.json`）。`?force=1` 忽略 cache、清除失敗標記重跑 |
+| POST | `/watch-job/{videoId}` | key | 看片路線（video）送片 |
+| POST | `/retime/{videoId}` | key | ⏱ 重算顯示時間軸（**零 LLM**、冪等可重按）|
+| POST | `/patch/{videoId}` | key | 只重譯有問題的句子。`?mode=untranslated`（預設）｜`cps`（📏 壓縮，先零成本剝英文夾註）｜`all` |
+| POST | `/turnstile/verify` | 公開 | 人機挑戰回呼（程式已備妥，目前休眠 —— 擋爬蟲的是 zone 層 WAF）|
 
-執行架構：翻譯拆成有界小步（plan → repair → glossary → translate → assemble）在 **Queues**
-上自我續鏈，每步 1–2 分鐘、做完即落地 checkpoint；cron（`*/5`）只是零成本看門狗（補漏，不碰 LLM）。
+執行架構：翻譯拆成有界小步（plan → repair → glossary → translate → assemble → patch；
+看片路線是 plan → watch）在 **Queues** 上自我續鏈，每步 1–2 分鐘、做完即落地 checkpoint；
+cron（`*/5`）只是零成本看門狗（補漏，不碰 LLM）。
 花費保險絲四層：Google 端配額（人工設）→ 每步 3 次重試後永久失敗 → 每片 token 上限 → 全域日預算
 （`VIDEO_TOKEN_CAP` / `DAILY_TOKEN_CAP` vars 可調，預設 500k / 2M tokens）。
 
@@ -58,7 +67,9 @@
 ## 自訂網域
 
 Worker → Settings → Domains & Routes → Add → Custom domain → `ytplayer.ai-apps.work`
-（zone 已在同帳號即可直接掛；workers.dev 網址仍然有效）
+（zone 已在同帳號即可直接掛）
+⚠ `workers.dev` 與 preview URL **已在 `wrangler.jsonc` 關閉**（`workers_dev: false`／`preview_urls: false`）——
+自訂網域是唯一入口，見 [../docs/privacy-hardening.md](../docs/privacy-hardening.md)
 
 ### 翻譯用法
 

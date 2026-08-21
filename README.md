@@ -78,8 +78,8 @@ Caption track 有四個層級，每層是不同的題目（詳見 [docs/handoff-
 - **字幕閱讀速度**：顯示時間換算成字數上限寫進 prompt（12 字/秒），讓模型自己壓縮 ——
   實測讀不完的句子少 29%、成本不變、沒被標的句子完全不動。
   舊片走 `/admin` 的 **📏壓縮** 鈕事後套用（只重譯超標那幾句；壓出來更長就不換）。
-  壓縮前先**零成本剝掉英文夾註**（`原廠（First-party）追蹤器`→`原廠追蹤器`）——
-  實測 hK9fypJKHyY 11→7、kCIvgJklMWQ 16→11 句不必送模型
+  壓縮前先**零成本剝掉英文夾註**（`原廠（First-party）追蹤器`→`原廠追蹤器`）。
+  production 實績：兩支舊片 11→3、16→0，**合計只花 NT$1.55**（整片重翻要 NT$32）
   （[docs/subtitle-readability.md](docs/subtitle-readability.md) §3.1、§6；`CPS_BUDGET=off` 可關）
 
 prompt 目前 **v6**；worker 測試 **175 個**。品質防線與所有實證教訓見
@@ -110,7 +110,7 @@ video 路由的影片另有**字卡層**（🃏 疊畫面上緣、逐句稿有�
 |---|---|---|---|
 | **播放畫質 B 案** | [video-quality.md](docs/video-quality.md) | 1 天 | A 案（劇場模式）已解尺寸門檻。要 4K／Premium 只剩「ext 在 youtube.com 原生頁疊字幕」——僅桌機、且要**兩套渲染並存**，維護成本高 |
 | **Glossary G2 養表流程** | [glossary-layers.md](docs/glossary-layers.md) §6 | 半天 | 儀表板編輯 + 「把自動抽的好譯法一鍵收進頻道表」。E2 已證明頻道表對模型真的有約束力（0/7 → 6/7 句），所以這筆投資現在有回報 |
-| **字幕可讀性 R2–R3**（R1、R4b 已上線）| [subtitle-readability.md](docs/subtitle-readability.md) | 1.5 天 | 實測尾巴 3% 的句子同時違反三條業界規範（最糟 18 CPS = Netflix 上限兩倍、36 字擠一行、單句掛 14 秒）。**R1 已實測上線**（CPS>12 -29%、tokens +0.3%），**R4b 📏壓縮鈕**讓舊片也修得掉；剩 R2 折行與拆塊、R3 前一句留著（行數預算 + 三態設定）、R4a ✂修排版（綁 R2b，R2b 不做就不用做）|
+| **字幕可讀性 R2–R3**（R1、R4b、R5 已上線）| [subtitle-readability.md](docs/subtitle-readability.md) | 1.5 天 | 實測尾巴 3% 的句子同時違反三條業界規範（最糟 18 CPS = Netflix 上限兩倍、36 字擠一行、單句掛 14 秒）。**R1 已實測上線**（CPS>12 -29%、tokens +0.3%），**R4b 📏壓縮鈕 + R5 零成本剝夾註**讓舊片也修得掉（實績 11→3、16→0，兩支共 NT$1.55）；剩 R2 折行與拆塊、R3 前一句留著（行數預算 + 三態設定）、R4a ✂修排版（綁 R2b，R2b 不做就不用做）|
 | **子句邊界漂移** | 只有方向，還沒有計畫 | 大 | F1 實測證實回聲對位管不到它。可能的方向是「翻譯前先把 ASR 碎片合併成完整句、翻完再按詞級時間切回 cue」—— 比回聲對位大得多的改動，先觀察它到底多礙眼再說 |
 
 ### B. 程式做完了、等你動手驗收（都是 5 分鐘內的事）
@@ -161,8 +161,8 @@ video 路由的影片另有**字卡層**（🃏 疊畫面上緣、逐句稿有�
 | [docs/future-ideas.md](docs/future-ideas.md) | **F1–F4 設計 + 實測結果**（回聲對位／lite 換協定／重評 SOP／ucid，含「原假設錯在哪」）|
 | [docs/model-reeval-sop.md](docs/model-reeval-sop.md) | **模型重評 SOP**：觸發條件、固定五步、判讀規則（候選 mean 要超出基準 min–max）|
 | [docs/exp-2026-08-16.md](docs/exp-2026-08-16.md) | **上線後補測**：G1 頻道表約束力、3.6-flash 重評、lite × 協定總表（含還沒測的誠實清單）|
-| [docs/patch-untranslated.md](docs/patch-untranslated.md) | **未譯句自動偵測 + 補譯**：三種病因解剖、P0 預防、P1 補譯步驟、實測 |
-| [docs/subtitle-readability.md](docs/subtitle-readability.md) | **字幕可讀性計畫**：Netflix 繁中規範（16 字/行、2 行、9 CPS）對照實測、R1 壓縮譯文／R2 折行拆塊／R3 行數預算 roll-up／R4 舊片事後套用 |
+| [docs/patch-untranslated.md](docs/patch-untranslated.md) | **未譯句自動偵測 + 補譯**：三種病因解剖、P0 預防、P1 補譯步驟（後來一般化成 `?mode=`）、實測 |
+| [docs/subtitle-readability.md](docs/subtitle-readability.md) | **字幕可讀性計畫**：Netflix 繁中規範（16 字/行、2 行、9 CPS）對照實測、R1 壓縮譯文／R2 折行拆塊／R3 行數預算 roll-up／R4 舊片事後套用／R5 剝夾註。§3.2 有 R4b 上線後的實戰數據與「剩下壓不動的是什麼」 |
 | [docs/privacy-hardening.md](docs/privacy-hardening.md) | **隱私三層**：workers.dev 關閉、UA 爬蟲閘門、Managed Challenge 的正確設法與雷區 |
 | [docs/glossary-layers.md](docs/glossary-layers.md) | Glossary 疊層（channel/genre/per-video）：G1+G3 已實作、G2 未做 |
 | [docs/pwa-plan.md](docs/pwa-plan.md) | PWA + 手機送片計畫與執行紀錄（桌機補收路線，已實作） |
