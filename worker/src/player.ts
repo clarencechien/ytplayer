@@ -70,10 +70,30 @@ const STYLE = `
     width: fit-content; max-width: 92%;
     background: rgba(8,10,14,.72); border-radius: .4em; padding: .1em .55em;
   }
-  #subEn:empty, #subZh:empty, #subNote:empty { display: none; }
+  #subEn:empty, #subZh:empty, #subNote:empty, #subPrev:empty { display: none; }
   #subZh, #subEn {
-    font-size: calc(clamp(17px, 2.3vw, 28px) * var(--scale));
+    font-size: calc(clamp(17px, 2.3vw, 28px) * var(--scale) * var(--fold, 1));
     font-weight: 600; line-height: 1.4; text-shadow: 0 1px 2px rgba(0,0,0,.8);
+  }
+  /* R2a 折行（docs/subtitle-readability.md §4a）：中文一行約 16 全形字（Netflix 繁中規範），
+     超過就讓瀏覽器自然折行。原文另給較寬的上限 —— 拉丁字母約 0.5em 寬，
+     套同一個 16em 會折得太碎（英文規範是 42 字元/行）*/
+  #subZh { max-width: min(92%, 16em); }
+  #subEn { max-width: min(92%, 24em); }
+  /* 行數預算不夠時縮一級（R3 的第 2 順位讓步，見 §5）。
+     ⚠ 光縮字級**不會**減少行數 —— max-width 是 em，字變小的同時可容納的字數不變。
+     所以縮字級一定要搭配「放寬 em 上限」：21em × .78 ≈ 原本 16.4em 的實體寬度，
+     但一行裝得下 21 個字而不是 16 個（瀏覽器實測出來的，不是推算）*/
+  body.tight { --fold: .78; }
+  body.tight #subZh { max-width: min(96%, 21em); }
+  body.tight #subEn { max-width: min(96%, 31em); }
+  /* R3 前一句（roll-up）：淡、小一級、只佔一行，點一下跳回重播 */
+  #subPrev {
+    max-width: min(92%, 20em); opacity: .5;
+    font-size: calc(clamp(13px, 1.7vw, 20px) * var(--scale));
+    line-height: 1.35; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    background: rgba(8,10,14,.6); border-radius: .4em; padding: .05em .5em;
+    pointer-events: auto; cursor: pointer; text-shadow: 0 1px 2px rgba(0,0,0,.8);
   }
   #subEn { color: var(--en); }
   #subNote { color: var(--accent); font-size: calc(clamp(12px, 1.3vw, 15px) * var(--scale)); white-space: pre-line; }
@@ -147,11 +167,12 @@ const STYLE = `
     align-items: stretch; gap: 3px; padding: 8px 12px;
     background: var(--panel); border-bottom: 1px solid var(--line);
   }
-  body.mobile #subEn, body.mobile #subZh, body.mobile #subNote {
+  body.mobile #subEn, body.mobile #subZh, body.mobile #subNote, body.mobile #subPrev {
     background: none; max-width: 100%; width: auto; padding: 0; text-shadow: none;
   }
-  body.mobile #subZh, body.mobile #subEn { font-size: calc(16px * var(--scale)); line-height: 1.45; }
+  body.mobile #subZh, body.mobile #subEn { font-size: calc(16px * var(--scale) * var(--fold, 1)); line-height: 1.45; }
   body.mobile #subNote { font-size: calc(12px * var(--scale)); }
+  body.mobile #subPrev { font-size: calc(13px * var(--scale)); }
   body.mobile header { padding: 6px 10px; gap: 6px; }
   body.mobile header h1 { font-size: 13px; }
   body.mobile header .meta { display: none; }
@@ -171,13 +192,16 @@ const STYLE = `
       background: none; border: 0; padding: 0 4%;
       pointer-events: none; text-align: center; align-items: center; gap: 4px;
     }
-    body.mobile #subEn, body.mobile #subZh, body.mobile #subNote {
+    body.mobile #subEn, body.mobile #subZh, body.mobile #subNote, body.mobile #subPrev {
       background: rgba(8,10,14,.72); border-radius: .4em; padding: .1em .55em;
       width: fit-content; max-width: 92%; margin: 0;
       text-shadow: 0 1px 2px rgba(0,0,0,.8);
     }
-    body.mobile #subZh, body.mobile #subEn { font-size: calc(clamp(16px, 2.2vw, 26px) * var(--scale)); }
+    body.mobile #subZh, body.mobile #subEn { font-size: calc(clamp(16px, 2.2vw, 26px) * var(--scale) * var(--fold, 1)); }
+    body.mobile #subZh { max-width: min(92%, 16em); }
+    body.mobile #subEn { max-width: min(92%, 24em); }
     body.mobile #subNote { font-size: calc(12px * var(--scale)); }
+    body.mobile #subPrev { font-size: calc(clamp(13px, 1.7vw, 19px) * var(--scale)); }
   }
 `;
 
@@ -204,6 +228,7 @@ export function watchPage(videoId: string): string {
   <div class="controls">
     <button id="btnMode" title="快捷鍵 C：開/關字幕">字幕：雙語</button>
     <button id="btnNotes" class="on">譯註：開</button>
+    <button id="btnPrev" class="on" title="前一句留著不馬上消失。自動＝行數預算有剩才顯示（關掉原文時自然出現）。點前一句可跳回重播">前一句：自動</button>
     <button id="btnFollow" class="on">跟隨捲動</button>
     <button id="btnSmaller">A−</button>
     <button id="btnBigger">A＋</button>
@@ -221,7 +246,7 @@ export function watchPage(videoId: string): string {
       <div id="player"></div>
       <div id="clickLayer" title="點擊：播放/暫停・雙擊：全螢幕"></div>
       <div id="cardLayer"></div>
-      <div id="subBand"><div id="subEn"></div><div id="subZh"></div><div id="subNote"></div></div>
+      <div id="subBand"><div id="subPrev" title="前一句（點一下跳回重播）"></div><div id="subEn"></div><div id="subZh"></div><div id="subNote"></div></div>
     </div>
   </div>
   <aside>
@@ -243,7 +268,9 @@ export function watchPage(videoId: string): string {
         <tr><td class="k">按住 H</td><td>字幕暫時隱形，放開恢復 — 看畫面上的資訊用</td></tr>
       </table>
       <div class="tip">
-        按鈕列：字幕模式（雙語→只中→只原文→無）、譯註、字級 A±、透明度、速度。<br>
+        按鈕列：字幕模式（雙語→只中→只原文→無）、譯註、<b>前一句</b>、字級 A±、透明度、速度。<br>
+        <b>前一句</b>：上一句淡淡留在上面，<b>點它就跳回去重播</b>。
+        「自動」＝畫面行數有剩才顯示 —— 關掉原文時它自然出現、開雙語時自然讓位。<br>
         要動 YouTube 原生介面（畫質齒輪等）→ 按「YT 介面：開放」，用完鎖回。<br>
         右側逐句稿點任一句可跳轉；黃色小字是譯註（術語第一次出現時自動附上白話解釋）。
       </div>
@@ -252,7 +279,9 @@ export function watchPage(videoId: string): string {
       <div class="tip">
         <b>點影片＝播放 / 暫停</b>；字幕在影片下方，不會遮住畫面。<br>
         下方逐句稿點任一句可跳轉；黃色小字是譯註（術語第一次出現時的白話解釋）。<br>
-        按鈕列：字幕模式（雙語→只中→只原文→無）、譯註、字級 A±、速度。<br>
+        按鈕列：字幕模式（雙語→只中→只原文→無）、譯註、<b>前一句</b>、字級 A±、速度。<br>
+        <b>前一句</b>：上一句淡淡留在上面、點它跳回重播。「自動」＝畫面行數有剩才顯示
+        （橫向看片時空間不夠會自動讓位）。<br>
         要用 YouTube 原生介面（音量、畫質）→ 按「YT 介面：開放」，用完鎖回。
       </div>
     </div>
@@ -266,15 +295,85 @@ var OFF = 3, ALPHAS = [1, 0.75, 0.5, 0.25], SPEEDS = [0.75, 1, 1.25, 1.5, 1.75, 
 // mobile 偵測：touch 為主、UA 為輔
 var MOBILE = (window.matchMedia && matchMedia("(pointer: coarse)").matches) ||
   /iPhone|iPad|Android/i.test(navigator.userAgent);
-var S = { mode: 0, notes: true, follow: !MOBILE, scale: 1, alpha: 0, speed: 1, theater: false };
+var S = { mode: 0, notes: true, follow: !MOBILE, scale: 1, alpha: 0, speed: 1, theater: false, prev: "auto" };
+// R3 前一句（docs/subtitle-readability.md §5）：三態而不是開關 ——
+// 「自動」＝行數預算有剩才顯示，於是關掉原文時它自然出現、開雙語時自然消失
+var PREVS = [["auto", "前一句：自動"], ["on", "前一句：開"], ["off", "前一句：關"]];
 var prevMode = 0; // C 鍵切回「無」之前的模式
 try { Object.assign(S, JSON.parse(localStorage.getItem("ytplayer-settings") || "{}")); } catch (e) {}
 var cues = [], rows = [], cur = -1, cardCues = [], cardKey = "";
 var yt = null, ytReady = false, pendingInit = false;
 var list = document.getElementById("list");
 var subEn = document.getElementById("subEn"), subZh = document.getElementById("subZh"), subNote = document.getElementById("subNote");
+var subPrev = document.getElementById("subPrev");
 
 function save() { localStorage.setItem("ytplayer-settings", JSON.stringify(S)); }
+
+// ---- R2a 折行 + R3 行數預算（docs/subtitle-readability.md §4a、§5）----
+// 折行本身交給 CSS（#subZh 的 max-width 就是 16 全形字），這裡只管「畫面給得起幾行」。
+function prevIdx() {
+  for (var i = 0; i < PREVS.length; i++) if (PREVS[i][0] === S.prev) return i;
+  return 0;
+}
+// 預算隨情境變動：疊在畫面上時多一行就是擋畫面，字幕在影片下方時空間充足
+function lineBudget() {
+  if (document.fullscreenElement || S.theater) return 4;
+  if (!MOBILE) return 4;
+  return window.innerWidth > window.innerHeight ? 2 : 3; // 橫向＝字幕疊回畫面
+}
+// 實測渲染行數（不是用字數猜）。
+// ⚠ 不能直接數 rects 的個數 —— 它是「一個文字框一個 rect」，
+// 中日文句子裡夾一段英文（「食品儲藏室（Pantry）」）會在**同一行**切成好幾個框。
+// 要按 y 座標分群才是行數（瀏覽器實測抓到的，靜態測試看不出來）
+function lineCount(el) {
+  if (!el.textContent || !el.offsetHeight) return 0;
+  var r = document.createRange();
+  r.selectNodeContents(el);
+  var rects = r.getClientRects();
+  var lh = parseFloat(getComputedStyle(el).lineHeight) || 16;
+  var tops = [];
+  for (var i = 0; i < rects.length; i++) {
+    var t = rects[i].top, seen = false;
+    for (var j = 0; j < tops.length; j++) if (Math.abs(tops[j] - t) < lh * 0.5) { seen = true; break; }
+    if (!seen) tops.push(t);
+  }
+  return Math.max(1, tops.length);
+}
+// 間隔 > 5 秒代表場景已經換了，留著上一句只會誤導
+function prevCue() {
+  var c = cues[cur], p = cues[cur - 1];
+  return c && p && c.start - p.end <= 5 ? p : null;
+}
+// 超出預算時**由下往上砍**，順序是原則性的：
+//   1. 先砍前一句 —— 系統自動加的，砍掉不違背使用者意圖
+//   2. 再讓中文縮一級塞回一行
+//   3. 原文永遠不砍 —— 使用者明確選了雙語模式，不能自動幫他關掉
+//      （同理，譯註是使用者開的，只計入行數、不砍）
+function layoutBand() {
+  if (!subPrev) return;
+  if (cur < 0) { subPrev.textContent = ""; return; }
+  document.body.classList.remove("tight");
+  var budget = lineBudget();
+  var used = lineCount(subZh) + lineCount(subEn) + lineCount(subNote);
+  if (used > budget) {
+    document.body.classList.add("tight");
+    used = lineCount(subZh) + lineCount(subEn) + lineCount(subNote);
+  }
+  var p = S.prev === "off" ? null : prevCue();
+  var show = p && (S.prev === "on" || used < budget);
+  subPrev.textContent = show ? (MODES[S.mode][0] === "en" ? p.en : p.zh) : "";
+  subPrev.dataset.t = show ? p.start : "";
+}
+// 點前一句 = 跳回去重播那句（「剛才那句沒聽清楚」正是本專案存在的理由）
+if (subPrev) {
+  subPrev.onclick = function () {
+    var t = parseFloat(subPrev.dataset.t || "");
+    if (isFinite(t) && yt && yt.seekTo) { yt.seekTo(t, true); yt.playVideo && yt.playVideo(); }
+  };
+}
+addEventListener("resize", layoutBand);
+addEventListener("orientationchange", layoutBand);
+document.addEventListener("fullscreenchange", layoutBand);
 function applySettings() {
   document.body.dataset.mode = MODES[S.mode][0];
   document.getElementById("btnMode").textContent = MODES[S.mode][1];
@@ -288,6 +387,10 @@ function applySettings() {
   document.getElementById("btnSpeed").textContent = "速度：" + (SPEEDS[S.speed] || 1) + "x";
   document.body.classList.toggle("theater", !!S.theater);
   document.getElementById("btnTheater").classList.toggle("on", !!S.theater);
+  var pi = prevIdx();
+  document.getElementById("btnPrev").textContent = PREVS[pi][1];
+  document.getElementById("btnPrev").classList.toggle("on", PREVS[pi][0] !== "off");
+  layoutBand();
   if (yt && yt.setPlaybackRate) yt.setPlaybackRate(SPEEDS[S.speed] || 1);
   setTimeout(showQuality, 1200); // 版面變動後 ABR 需要一點時間換檔
 }
@@ -313,6 +416,9 @@ document.getElementById("btnSpeed").onclick = function () { S.speed = (S.speed +
 function stepSpeed(d) { S.speed = Math.min(SPEEDS.length - 1, Math.max(0, S.speed + d)); save(); applySettings(); }
 document.getElementById("btnTheater").onclick = function () { S.theater = !S.theater; save(); applySettings(); };
 document.getElementById("btnNotes").onclick = function () { S.notes = !S.notes; save(); applySettings(); };
+document.getElementById("btnPrev").onclick = function () {
+  S.prev = PREVS[(prevIdx() + 1) % PREVS.length][0]; save(); applySettings();
+};
 document.getElementById("btnFollow").onclick = function () { S.follow = !S.follow; save(); applySettings(); };
 document.getElementById("btnSmaller").onclick = function () { S.scale = Math.max(0.7, +(S.scale - 0.1).toFixed(2)); save(); applySettings(); };
 document.getElementById("btnBigger").onclick = function () { S.scale = Math.min(1.8, +(S.scale + 0.1).toFixed(2)); save(); applySettings(); };
@@ -550,11 +656,15 @@ function tick() {
   if (idx === cur) return;
   if (cur >= 0 && rows[cur]) rows[cur].classList.remove("cur");
   cur = idx;
-  if (idx < 0) { subZh.textContent = ""; subEn.textContent = ""; subNote.textContent = ""; return; }
+  if (idx < 0) {
+    subZh.textContent = ""; subEn.textContent = ""; subNote.textContent = ""; subPrev.textContent = "";
+    return;
+  }
   var c = cues[idx];
   subZh.textContent = c.zh;
   subEn.textContent = c.en;
   subNote.textContent = c.note || "";
+  layoutBand(); // 換句之後才知道實際佔幾行（R3 行數預算）
   rows[idx].classList.add("cur");
   if (S.follow) rows[idx].scrollIntoView({ block: MOBILE ? "nearest" : "center", behavior: "smooth" });
 }
