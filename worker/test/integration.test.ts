@@ -268,6 +268,24 @@ describe('runPipeline（in-process 整合）', () => {
       expect(r.next).toBeUndefined();
     });
 
+    // 耗時 = 開翻到翻完。事後補譯會推進 updatedAt，但不該把這支片的耗時撐大
+    //（不然幾天後按一次按鈕就顯示「跑了 7229 分鐘」，看起來像失控燒錢）
+    it('事後壓縮推進 updatedAt，但 doneAt 不動 —— 耗時不該被按鈕撐大', async () => {
+      const SUBS = await seedLongVideo();
+      const st0 = readJson(SUBS, 'subs/ksfm6jeTg3Q/status.json') as JobStatus;
+      expect(st0.doneAt).toBeTruthy();
+      expect(readJson(SUBS, 'subs/ksfm6jeTg3Q/bilingual.json').generatedAt).toBe(st0.doneAt);
+
+      const shortLlm = async (prompt: string): Promise<string> => {
+        const ids = [...prompt.matchAll(/^(\d+): /gm)].map((m) => Number(m[1]));
+        return JSON.stringify(ids.map((id) => ({ id, zh: `短句${id}。` })));
+      };
+      await runStep(envOf(SUBS), { videoId: 'ksfm6jeTg3Q', step: 'patch', mode: 'cps' }, shortLlm);
+      const st1 = readJson(SUBS, 'subs/ksfm6jeTg3Q/status.json') as JobStatus;
+      expect(st1.doneAt).toBe(st0.doneAt);
+      expect(Date.parse(st1.updatedAt)).toBeGreaterThanOrEqual(Date.parse(st1.doneAt!));
+    });
+
     it('mode=cps 不碰未譯句；沒有目標時直接回 0 且不呼叫模型', async () => {
       const SUBS = new FakeR2();
       await SUBS.put('subs/ksfm6jeTg3Q/source.json', JSON.stringify(makeSource()));

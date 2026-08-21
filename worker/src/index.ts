@@ -250,14 +250,17 @@ export default {
         // 舊片的 status.json 沒有 untranslated／cpsOver 欄位（那時還沒這些功能）→ 從 bilingual.json
         // 回填一次就好，否則儀表板永遠看不到既有影片的問題句
         //（docs/patch-untranslated.md P2、docs/subtitle-readability.md R4b）
-        if ((st.untranslated === undefined || st.cpsOver === undefined) && st.stage === 'done') {
+        if ((st.untranslated === undefined || st.cpsOver === undefined || st.doneAt === undefined) && st.stage === 'done') {
           const bil = await env.SUBS.get(`subs/${videoId}/bilingual.json`);
           if (bil) {
             const doc = JSON.parse(await bil.text()) as {
+              generatedAt?: string;
               cues?: Array<{ start: number; end: number; zh: string; untranslated?: boolean }>;
             };
             st.untranslated = (doc.cues ?? []).filter((c) => c.untranslated).length;
             st.cpsOver = countCpsOver(doc.cues ?? []);
+            // bilingual 的 generatedAt 就是「這支片翻完的時刻」，舊片也有 —— 拿它當耗時的終點
+            st.doneAt = doc.generatedAt ?? st.updatedAt;
             await env.SUBS.put(`subs/${videoId}/status.json`, JSON.stringify(st), {
               httpMetadata: { contentType: 'application/json' },
             });
@@ -277,6 +280,8 @@ export default {
           estNTD: est((st.tokensUsed as number) ?? 0, st.promptTokens as number | undefined),
           startedAt: st.startedAt,
           updatedAt: st.updatedAt,
+          doneAt: st.doneAt, // 耗時要用它，不是 updatedAt（補譯會推進 updatedAt）
+
           warningCount: Array.isArray(st.warnings) ? st.warnings.length : 0,
           // 未譯句數：使用者不該在看片時才發現（docs/patch-untranslated.md P2）
           untranslated: (st.untranslated as number) ?? 0,

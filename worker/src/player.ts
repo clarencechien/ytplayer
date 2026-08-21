@@ -787,8 +787,10 @@ function refresh() {
         '<div class="stat"><div class="v">NT$ ' + t.estNTD + '</div><div class="k">今日估算費用</div></div>' +
         '<div class="stat"><div class="v">' + d.jobs.filter(function (j) { return !j.failed && j.stage !== "done"; }).length + '</div><div class="k">進行中任務</div></div>';
       var rows = d.jobs.map(function (j) {
+        // 耗時 = 開翻到翻完。已完成的片要用 doneAt —— 用 updatedAt 的話，
+        // 幾天後按一次補譯就會顯示成「跑了 7229 分鐘」，看起來像失控燒錢
         var elapsed = (j.stage === "done" || j.failed)
-          ? Date.parse(j.updatedAt) - Date.parse(j.startedAt)
+          ? Date.parse(j.doneAt || j.updatedAt) - Date.parse(j.startedAt)
           : Date.now() - Date.parse(j.startedAt);
         return "<tr><td><a class='title' href='/watch/" + j.videoId + "' target='_blank' title='" + esc(j.title) + "'>" + esc(j.title) + "</a><br>" +
           "<span class='hint'>" + j.videoId + "・<a href='/subs/" + j.videoId + "/status.json' target='_blank'>status</a>" +

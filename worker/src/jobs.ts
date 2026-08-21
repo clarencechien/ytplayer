@@ -94,8 +94,12 @@ export interface JobStatus {
   asrRepaired: number;
   // 未譯句數（assemble/patch 後更新）：儀表板要看得到，不能只躺在 bilingual.json 裡
   untranslated?: number;
-  cpsOver?: number; // 顯示時間讀不完的句數（R1 指標，未來的「📏 壓縮」按鈕會用）
+  cpsOver?: number; // 顯示時間讀不完的句數（R1 指標，「📏 壓縮」按鈕會用）
   patchRounds?: number; // 補譯輪數（上限 2 — 補不動的就是補不動，別無限燒）
+  // 這支片第一次翻完的時刻。**耗時要用它算，不能用 updatedAt** ——
+  // 事後補譯／壓縮會推進 updatedAt，拿它減 startedAt 會把「幾天後按了一次按鈕」
+  // 顯示成「跑了 7229 分鐘」，看起來像失控燒錢（2026-08-21 實際誤會過一次）
+  doneAt?: string;
   warnings: string[];
   // token 流向拆解（帳單事故的診斷欄）：thinking 以輸出價計費，是成本大宗嫌疑犯
   promptTokens?: number;
@@ -506,6 +510,7 @@ async function assembleVideoStep(env: JobEnv, videoId: string, st: JobStatus): P
 
   st.stage = 'done';
   st.step = undefined;
+  st.doneAt = bilingual.generatedAt;
   st.warnings = warnings;
   await writeStatus(env, st);
   return {
@@ -902,6 +907,7 @@ async function assembleStep(env: JobEnv, videoId: string): Promise<StepResult> {
 
   st.stage = 'done';
   st.step = undefined;
+  st.doneAt = bilingual.generatedAt; // 耗時的分母（之後的補譯不該算進這支片的翻譯時間）
   st.asrRepaired = sentencesDoc.asrRepaired;
   st.untranslated = untranslated;
   st.cpsOver = cpsOver;
