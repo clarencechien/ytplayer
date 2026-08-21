@@ -25,9 +25,10 @@ describe('segmentCues', () => {
       { start: 4, dur: 2, text: 'Second sentence!' },
     ];
     const s = segmentCues(cues);
+    // cue 級斷句也帶起訖（來自 cue 邊界的真實時間）—— R1 的字數預算靠它
     expect(s).toEqual([
-      { id: 0, text: 'Hello world this is a test.', cueIds: [0, 1] },
-      { id: 1, text: 'Second sentence!', cueIds: [2] },
+      { id: 0, text: 'Hello world this is a test.', cueIds: [0, 1], start: 0, end: 4 },
+      { id: 1, text: 'Second sentence!', cueIds: [2], start: 4, end: 6 },
     ]);
   });
 
@@ -56,7 +57,7 @@ describe('segmentCues', () => {
     }));
     const s = segmentCues(cues);
     expect(s.length).toBe(12); // 尊重原始斷行
-    expect(s[5]).toEqual({ id: 5, text: '歌詞第5行 あなたのこと', cueIds: [5] });
+    expect(s[5]).toEqual({ id: 5, text: '歌詞第5行 あなたのこと', cueIds: [5], start: 15, end: 18 });
   });
 
   it('逐行模式：空白 cue 剔除且 id 連續', () => {
@@ -67,7 +68,7 @@ describe('segmentCues', () => {
     ];
     const s = segmentCues(cues);
     expect(s.map((x) => x.id)).toEqual([0, 1]);
-    expect(s[1]).toEqual({ id: 1, text: 'line two', cueIds: [2] });
+    expect(s[1]).toEqual({ id: 1, text: 'line two', cueIds: [2], start: 4, end: 6 });
   });
 
   it('CJK 句尾標點（。！？）也算句子邊界（合併模式）', () => {

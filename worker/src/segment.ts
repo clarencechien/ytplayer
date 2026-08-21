@@ -10,6 +10,9 @@ export interface Sentence {
   // 詞級斷句（cue 帶 segs）時句子自帶精準起訖；無則由 assemble 從 cueIds 推
   start?: number;
   end?: number;
+  // 字數上限（docs/subtitle-readability.md R1）：由 chunkSentences 依顯示秒數算出，
+  // 只在時間可靠且預算會造成約束時才有值。不持久化到 sentences.json
+  budget?: number;
 }
 
 // 句尾標點含 CJK（。！？、日文引號）；歌詞這類「整片無標點」的輸入
@@ -96,7 +99,13 @@ export function segmentCues(cues: Cue[]): Sentence[] {
   const punctRatio = cues.filter((c) => SENTENCE_END.test(c.text.trim())).length / Math.max(1, cues.length);
   if (punctRatio < 0.1) {
     return cues
-      .map((c, i) => ({ id: i, text: c.text.replace(/\s+/g, ' ').trim(), cueIds: [i] }))
+      .map((c, i) => ({
+        id: i,
+        text: c.text.replace(/\s+/g, ' ').trim(),
+        cueIds: [i],
+        start: c.start,
+        end: c.start + c.dur,
+      }))
       .filter((s) => s.text.length > 0)
       .map((s, id) => ({ ...s, id }));
   }
@@ -112,7 +121,20 @@ export function segmentCues(cues: Cue[]): Sentence[] {
 
   const flush = () => {
     const text = buf.join(' ').replace(/\s+/g, ' ').trim();
-    if (text && ids.length) sentences.push({ id: sentences.length, text, cueIds: ids });
+    if (text && ids.length) {
+      // cue 邊界的時間是 YouTube 給的真實時間（不是模型估的）—— 精度不如詞級，
+      // 但足以算字幕的顯示視窗。沒有它，R1 的字數預算對「沒有詞級時間的舊片」
+      // 會全部失效而且**完全不會報錯**（2026-08-17 為此白跑一輪 A/B）
+      const first = cues[ids[0]];
+      const last = cues[ids[ids.length - 1]];
+      sentences.push({
+        id: sentences.length,
+        text,
+        cueIds: ids,
+        start: first.start,
+        end: last.start + last.dur,
+      });
+    }
     buf = [];
     ids = [];
   };

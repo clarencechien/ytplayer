@@ -11,6 +11,8 @@ import {
   echoMismatch,
   translatableSentence,
   needsRetranslate,
+  charBudget,
+  countCpsOver,
   assembleBilingual,
   attachGlossaryNotes,
   toSrt,
@@ -80,6 +82,62 @@ describe('不可翻句與補譯目標（P0-b / P1）', () => {
   it('chunkSentences 把不可翻句排除在 target 之外（不送模型、不佔重試）', () => {
     const ss = [sent(0, 'hello there friend'), sent(1, '。'), sent(2, 'second line here')];
     expect(chunkSentences(ss).flatMap((c) => c.target.map((s) => s.id))).toEqual([0, 2]);
+  });
+});
+
+describe('R1 字幕閱讀速度預算（docs/subtitle-readability.md）', () => {
+  const at = (id: number, start: number, end: number): Sentence => ({ id, text: `sentence ${id}`, cueIds: [id], start, end });
+
+  it('預算 = 顯示視窗 × 12 CPS，且視窗算的是 retime 後的顯示時間（延伸到下一句）', () => {
+    // 語音 1 秒，但下一句 1.5 秒後才開始 → 實際看得到 1.45 秒 → 預算 17 而不是 12
+    expect(charBudget(at(0, 0, 1), at(1, 1.5, 2.5))).toBe(17);
+    // 末句有 1.5 秒加映 → 視窗 2.5 秒 → 預算 30 字 → 寬到不必標
+    expect(charBudget(at(0, 0, 1))).toBeUndefined();
+    expect(charBudget(at(0, 0, 0.4))).toBe(23); // 短末句：1.9 秒 → 23 字，會標
+  });
+
+  it('延伸有上限（+3 秒），長靜默不會換來無限預算', () => {
+    expect(charBudget(at(0, 0, 1), at(1, 60, 61))).toBe(undefined); // 1+3=4 秒 → 48 → 夾到 32 → 不標
+  });
+
+  it('預算寬到 24 字以上就不標註 —— 模型本來就不會寫那麼長', () => {
+    expect(charBudget(at(0, 0, 3), at(1, 3, 4))).toBe(undefined); // 3 秒 → 35 → 夾到 32 → 不標
+    expect(charBudget(at(0, 0, 1.5), at(1, 1.5, 3))).toBe(17); // 1.45 秒 → 17 → 標
+  });
+
+  it('時間不可靠就不給預算（假的預算比沒有更糟）', () => {
+    expect(charBudget({ id: 0, text: 'x', cueIds: [0] })).toBe(undefined); // 非詞級斷句，沒有 start/end
+    expect(charBudget(at(0, 5, 5))).toBe(undefined); // 零長度
+  });
+
+  it('chunkSentences 把預算掛上 target，prompt 標成 [≤N 字]', async () => {
+    const ss = [at(0, 0, 1), at(1, 1.2, 5), at(2, 5, 6)];
+    const chunk = chunkSentences(ss)[0];
+    expect(chunk.target[0].budget).toBe(14); // 0→1.15 秒
+    expect(chunk.target[1].budget).toBeUndefined(); // 3.8 秒 → 夠寬，不標
+
+    let seen = '';
+    await translateChunk(
+      async (p) => {
+        seen = p;
+        return JSON.stringify(chunk.target.map((s) => ({ id: s.id, t: s.text.slice(0, 12), zh: `中文${s.id}。` })));
+      },
+      meta,
+      [],
+      chunk
+    );
+    expect(seen).toContain('0: [≤14 字] sentence 0');
+    expect(seen).toContain('1: sentence 1'); // 沒預算的不標
+    expect(seen).toContain('顯示時間只夠讀');
+  });
+
+  it('countCpsOver：只數有譯文且超速的句子', () => {
+    const cues = [
+      { start: 0, end: 1, zh: '一二三四五六七八九十一二三' }, // 13 字 / 1 秒 = 13 CPS
+      { start: 1, end: 3, zh: '正常長度的譯文' }, // 3.5 CPS
+      { start: 3, end: 3.5, zh: '很長很長很長很長的原文照抄', untranslated: true }, // 未譯不算
+    ];
+    expect(countCpsOver(cues)).toBe(1);
   });
 });
 

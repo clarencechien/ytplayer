@@ -150,16 +150,58 @@ export function cleanAsrText(text: string): string {
     .trim();
 }
 
+// --- 字幕閱讀速度預算（docs/subtitle-readability.md R1）---
+//
+// 業界規範（Netflix 繁中）是 9 CPS，但那是「看戲」的標準。實測我們全庫 2217 句的
+// 中位數只有 4.2 CPS —— 用 9 當預算會對 38% 的句子下約束（其中九成本來就沒問題），
+// 那是全身麻醉不是外科手術。取 **12 CPS**：只碰 21%，真正需要壓縮的 2%。
+export const CPS_TARGET = 12;
+const BUDGET_MIN = 8; // 再低會逼出電報體
+const BUDGET_MAX = 32; // 2 行 × 16 字；再長是排版問題（R2）不是壓縮問題
+const ANNOTATE_BELOW = 24; // 預算寬到這個地步就別標了 —— 模型本來就不會寫那麼長
+
+// 回傳字數上限；undefined = 不標註（時間不可靠，或預算寬到沒有意義）
+export function charBudget(s: Sentence, next?: Sentence): number | undefined {
+  // 時間不可靠就不給預算：假的預算比沒有更糟（video 路由的時間軸是模型估的，
+  // 非詞級斷句的 Sentence 也沒有 start/end）
+  if (s.start == null || s.end == null) return undefined;
+  const dur = s.end - s.start;
+  if (!(dur > 0)) return undefined;
+  // 鏡射 retimeCues：實際顯示時間會延伸到下一句開始（上限 +3 秒），
+  // 用語音長度算會低估預算、把譯文壓得比需要的更短
+  const toNext = next?.start != null ? next.start - s.start - 0.05 : dur + 1.5;
+  const window = Math.max(1, Math.min(toNext, dur + 3));
+  const budget = Math.min(BUDGET_MAX, Math.max(BUDGET_MIN, Math.round(window * CPS_TARGET)));
+  return budget < ANNOTATE_BELOW ? budget : undefined;
+}
+
+// 顯示速度超標的句數（deterministic 指標，assemble 後算，讓它在 hints 裡看得見）
+export const countCpsOver = (
+  cues: Array<{ start: number; end: number; zh: string; untranslated?: boolean }>,
+  target = CPS_TARGET
+): number =>
+  cues.filter((c) => !c.untranslated && c.end > c.start && c.zh.length / (c.end - c.start) > target).length;
+
 // --- 分塊 ---
 
-export function chunkSentences(sentences: Sentence[], size = 40, overlap = 2): TranslateChunkInput[] {
+export function chunkSentences(
+  sentences: Sentence[],
+  size = 40,
+  overlap = 2,
+  withBudget = true // false = 不標字數預算（A/B 對照組，也是 production 的 kill switch）
+): TranslateChunkInput[] {
+  // 先算預算（要看下一句的 start，所以在過濾之前、用完整清單算）
+  const all = sentences.map((s, i) => {
+    const budget = withBudget ? charBudget(s, sentences[i + 1]) : undefined;
+    return budget ? { ...s, budget } : s;
+  });
   const chunks: TranslateChunkInput[] = [];
-  for (let i = 0; i < sentences.length; i += size) {
+  for (let i = 0; i < all.length; i += size) {
     chunks.push({
-      before: sentences.slice(Math.max(0, i - overlap), i),
+      before: all.slice(Math.max(0, i - overlap), i),
       // 不可翻的句子（只有標點/音符）不進 target：送去翻只會浪費重試，還會被標未譯
-      target: sentences.slice(i, i + size).filter((s) => translatableSentence(s.text)),
-      after: sentences.slice(i + size, i + size + overlap),
+      target: all.slice(i, i + size).filter((s) => translatableSentence(s.text)),
+      after: all.slice(i + size, i + size + overlap),
     });
   }
   return chunks;
