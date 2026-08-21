@@ -182,6 +182,23 @@ export const countCpsOver = (
 ): number =>
   cues.filter((c) => !c.untranslated && c.end > c.start && c.zh.length / (c.end - c.start) > target).length;
 
+// R5（docs/subtitle-readability.md §3.2）：剝掉譯文裡的「英文夾註」——
+//「精準追蹤（Precision tracking）」這種括號原文。**只用在壓縮模式的超標句**：
+// 資訊一點都沒有消失（下面那行原文、glossary 掛的 note 欄位都還在），
+// 但它在 1.5 秒的 cue 裡可以吃掉一半的字數預算 —— 實測有夾註的句子超標率 50%，全片基準 4%。
+// 括號裡沒有拉丁字母的（例：「（笑）」「（尋找我的裝置）」）一律不動：那是說明，不是重複。
+const GLOSS = /[（(][^（()）]*[A-Za-z][^（()）]*[)）]/g;
+export function stripGloss(zh: string): string {
+  if (!GLOSS.test(zh)) return zh;
+  GLOSS.lastIndex = 0; // 全域 regex 有狀態，test 之後一定要歸零
+  const out = zh
+    .replace(GLOSS, '')
+    .replace(/\s{2,}/g, ' ')
+    .replace(/^[，、。,\s]+/, '') // 夾註在句首時會留下孤兒逗號
+    .trim();
+  return out.length > 0 ? out : zh; // 整句只有夾註就別動它
+}
+
 // --- 分塊 ---
 
 export function chunkSentences(

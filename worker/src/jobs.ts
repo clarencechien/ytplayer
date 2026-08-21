@@ -25,6 +25,7 @@ import {
   scanBanned,
   needsRetranslate,
   countCpsOver,
+  stripGloss,
   CPS_TARGET,
   type SourceDoc,
   type GlossaryEntry,
@@ -977,6 +978,7 @@ async function patchStep(env: JobEnv, videoId: string, mode: PatchMode = 'untran
   const isTarget = (s: Sentence, c: BilingualDoc['cues'][number]): boolean =>
     (wantUn && needsRetranslate(s.text, c.zh, c.untranslated)) || (wantCps && exceedsCps(c));
 
+  let retries = 0;
   const targets = doc.cues
     .map((c, i) => ({ i, s: sentencesDoc.sentences[i], c }))
     .filter(({ s, c }) => isTarget(s, c));
@@ -987,37 +989,58 @@ async function patchStep(env: JobEnv, videoId: string, mode: PatchMode = 'untran
     return { status: 200, body: { ok: true, patched: 0, mode, note: '沒有需要補譯的句子' } };
   }
 
+  // R5：先做零成本的那一半 —— 剝掉超標句的英文夾註再重算一次。
+  // 達標的就不必送模型（省錢），而且 deterministic 的修法本來就該排在花錢的修法前面。
+  let stripped = 0;
+  if (wantCps) {
+    for (const t of targets) {
+      if (!exceedsCps(t.c)) continue;
+      const zh = stripGloss(t.c.zh);
+      if (zh === t.c.zh) continue;
+      t.c = { ...t.c, zh };
+      doc.cues[t.i] = t.c;
+      stripped++;
+    }
+  }
+  // 剝完還超標的（以及未譯的）才送模型
+  const remaining = targets.filter(({ s, c }) => isTarget(s, c));
+
   const meter: StepMeter = newMeter();
-  const llm = makeStepLlm(env, meter, 6, llmOverride, modelOf(env, st));
   const all = sentencesDoc.sentences;
   const ctx = (i: number, d: number): Sentence[] => all.slice(Math.max(0, i - d), i);
   // 一次最多補 40 句（更多代表整片有問題，該重翻而不是補）
-  const picked = targets.slice(0, 40);
-  const truncated = targets.length > picked.length; // 被 40 上限切掉 ≠ 補不動，兩者的續接條件不同
-  const first = picked[0].i;
-  const last = picked[picked.length - 1].i;
-  const outcome = await translateChunk(
-    llm,
-    doc.meta,
-    glossaryDoc?.glossary ?? [],
-    {
-      before: ctx(first, 2),
-      // 壓縮模式要把字數上限一起送進 prompt —— 不然模型不知道要壓多短（R1 同一套機制）
-      target: picked.map((t) => (wantCps ? { ...t.s, budget: cueBudget(t.c) } : t.s)),
-      after: all.slice(last + 1, last + 3),
-    },
-    doc.sourceLang
-  );
-
+  const picked = remaining.slice(0, 40);
+  const truncated = remaining.length > picked.length; // 被 40 上限切掉 ≠ 補不動，兩者的續接條件不同
   let patched = 0;
-  for (const { i, s, c } of picked) {
-    const v = outcome.byId.get(s.id);
-    if (!v) continue;
-    // 壓縮模式：改出來更長就不換 —— 重譯不該讓情況變糟
-    if (wantCps && !c.untranslated && v.zh.length >= c.zh.length && !needsRetranslate(s.text, c.zh, c.untranslated)) continue;
-    doc.cues[i] = { ...doc.cues[i], zh: v.zh, ...(v.note ? { note: v.note } : {}) };
-    delete doc.cues[i].untranslated;
-    patched++;
+  if (picked.length > 0) {
+    const llm = makeStepLlm(env, meter, 6, llmOverride, modelOf(env, st));
+    const first = picked[0].i;
+    const last = picked[picked.length - 1].i;
+    const outcome = await translateChunk(
+      llm,
+      doc.meta,
+      glossaryDoc?.glossary ?? [],
+      {
+        before: ctx(first, 2),
+        // 壓縮模式要把字數上限一起送進 prompt —— 不然模型不知道要壓多短（R1 同一套機制）
+        target: picked.map((t) => (wantCps ? { ...t.s, budget: cueBudget(t.c) } : t.s)),
+        after: all.slice(last + 1, last + 3),
+      },
+      doc.sourceLang
+    );
+    retries = outcome.retries;
+
+    for (const { i, s, c } of picked) {
+      const v = outcome.byId.get(s.id);
+      if (!v) continue;
+      // 模型也常常把夾註加回來 —— 壓縮模式一律再剝一次，標準前後一致
+      const zh = wantCps && exceedsCps(c) ? stripGloss(v.zh) : v.zh;
+      // 壓縮模式：改出來更長就不換 —— 重譯不該讓情況變糟
+      if (wantCps && !c.untranslated && zh.length >= c.zh.length && !needsRetranslate(s.text, c.zh, c.untranslated)) continue;
+      doc.cues[i] = { ...doc.cues[i], zh, ...(v.note ? { note: v.note } : {}) };
+      delete doc.cues[i].untranslated;
+      patched++;
+    }
   }
 
   const leftUn = doc.cues.filter((c, i) => needsRetranslate(sentencesDoc.sentences[i].text, c.zh, c.untranslated)).length;
@@ -1029,8 +1052,9 @@ async function patchStep(env: JobEnv, videoId: string, mode: PatchMode = 'untran
     ...(leftUn > 0 ? [`${leftUn} 句翻譯失敗，以原文代替（標 untranslated，已補譯 ${(st.patchRounds ?? 0) + 1} 輪）`] : []),
   ];
   doc.hints = [
-    ...doc.hints.filter((h) => !/補譯|字\/秒/.test(h)),
+    ...doc.hints.filter((h) => !/補譯|字\/秒|夾註/.test(h)),
     `補譯（${mode}）：${patched} 句已改寫${left > 0 ? `，仍有 ${left} 句沒解決` : ''}`,
+    ...(stripped > 0 ? [`剝掉 ${stripped} 句的英文夾註（零 LLM，原文與 note 都還在）`] : []),
     ...(leftCps > 0 ? [`${leftCps} 句超過 ${CPS_TARGET} 字/秒（顯示時間可能讀不完）`] : []),
   ];
   await jsonPut(env, `subs/${videoId}/bilingual.json`, doc);
@@ -1043,10 +1067,10 @@ async function patchStep(env: JobEnv, videoId: string, mode: PatchMode = 'untran
   st.patchRounds = (st.patchRounds ?? 0) + 1;
   st.untranslated = leftUn;
   st.cpsOver = leftCps;
-  await settle(env, st, meter, outcome.retries);
+  await settle(env, st, meter, retries);
   return {
     status: 200,
-    body: { ok: true, mode, patched, left, leftUntranslated: leftUn, leftCps, truncated, round: st.patchRounds },
+    body: { ok: true, mode, patched, stripped, left, leftUntranslated: leftUn, leftCps, truncated, round: st.patchRounds },
     // 續接的兩種理由要分清楚：
     //   未譯 —— 值得再試一次（模型第二次常常就給得出來）
     //   壓縮 —— **壓不動的不重試**（原譯文本來就可用，只是讀起來趕；§3），
