@@ -24,6 +24,8 @@ import {
   routeSource,
   scanBanned,
   needsRetranslate,
+  countCpsOver,
+  CPS_TARGET,
   type SourceDoc,
   type GlossaryEntry,
   type BilingualCue,
@@ -86,6 +88,7 @@ export interface JobStatus {
   asrRepaired: number;
   // 未譯句數（assemble/patch 後更新）：儀表板要看得到，不能只躺在 bilingual.json 裡
   untranslated?: number;
+  cpsOver?: number; // 顯示時間讀不完的句數（R1 指標，未來的「📏 壓縮」按鈕會用）
   patchRounds?: number; // 補譯輪數（上限 2 — 補不動的就是補不動，別無限燒）
   warnings: string[];
   // token 流向拆解（帳單事故的診斷欄）：thinking 以輸出價計費，是成本大宗嫌疑犯
@@ -121,6 +124,9 @@ export interface JobEnv {
   // 'array' = 按位置對齊的純字串陣列，給 lite 級模型用 —— **尚未通過 A/B 驗證，預設不啟用**；
   // 要開必須同時把 CHUNK_SIZE 調小（10–15），因為它無法部分成功（長度不符整包重來）
   TRANSLATE_PROTOCOL?: string;
+  // 字幕閱讀速度預算（docs/subtitle-readability.md R1）：預設開。
+  // 設 'off' 關掉 —— A/B 對照組用，也是「模型壓縮得太過頭」時的 kill switch
+  CPS_BUDGET?: string;
 }
 
 // video 路由的 ingest 請求檔（admin 貼連結 / API 建立）
@@ -759,7 +765,7 @@ async function translateStep(env: JobEnv, videoId: string, batch: number, llmOve
   if (!sentencesDoc || sentencesDoc.sourceUploaded !== st.sourceUploaded || !glossaryDoc) {
     return { status: 202, body: { ok: true, restarted: true }, next: { videoId, step: 'plan' } };
   }
-  const allChunks = chunkSentences(sentencesDoc.sentences, chunkSize(env));
+  const allChunks = chunkSentences(sentencesDoc.sentences, chunkSize(env), 2, env.CPS_BUDGET !== 'off');
   const chunks = allChunks.slice(batch * CHUNKS_PER_BATCH, (batch + 1) * CHUNKS_PER_BATCH);
 
   const meter: StepMeter = newMeter();
@@ -846,6 +852,10 @@ async function assembleStep(env: JobEnv, videoId: string): Promise<StepResult> {
   if (echoOff > 0) hints.push(`${echoOff} 個 chunk 的模型未回 t 欄位，該段回聲對位未生效（退回只靠 id）`);
   // F1 的成效指標：被擋下的都已重譯（不是缺句），這行是「回聲對位有沒有在做事」的唯一硬證據
   if (echoRejects > 0) hints.push(`回聲對位攔下 ${echoRejects} 句次對位不符的譯文（已重譯）`);
+  // R1 的成效指標（docs/subtitle-readability.md）：顯示時間讀不完的句數。
+  // 在 retime 之後算 —— 顯示時間才是觀眾實際有的時間
+  const cpsOver = countCpsOver(cues);
+  if (cpsOver > 0) hints.push(`${cpsOver} 句超過 ${CPS_TARGET} 字/秒（顯示時間可能讀不完）`);
   const autoNotes = attachGlossaryNotes(cues, glossaryDoc.glossary);
 
   // schema v2（migration.md §1）：orig 取代 en、kind 標記 speech/card、trust 標記信任等級
@@ -888,6 +898,7 @@ async function assembleStep(env: JobEnv, videoId: string): Promise<StepResult> {
   st.step = undefined;
   st.asrRepaired = sentencesDoc.asrRepaired;
   st.untranslated = untranslated;
+  st.cpsOver = cpsOver;
   st.warnings = warnings;
   await writeStatus(env, st);
 

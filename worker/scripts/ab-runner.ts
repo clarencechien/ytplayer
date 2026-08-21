@@ -12,6 +12,7 @@
 import { setGlobalDispatcher, ProxyAgent } from 'undici';
 import { writeFileSync, mkdirSync, readdirSync, readFileSync } from 'node:fs';
 import { runPipeline, type JobEnv } from '../src/jobs';
+import { charBudget } from '../src/pipeline';
 
 const proxy = process.env.HTTPS_PROXY || process.env.https_proxy;
 if (proxy) setGlobalDispatcher(new ProxyAgent(proxy));
@@ -70,6 +71,9 @@ interface RunMetrics {
   cues: number;
   untranslated: number;
   drift: number; // 子句邊界漂移的 hint 命中數
+  cpsOver: number; // 顯示時間讀不完的句數（R1 指標）
+  budgeted: number; // 被標字數預算的句數 —— **0 代表功能根本沒啟動**，別再白跑一輪
+  zhMedian: number; // 譯文字數中位數 —— 用來確認壓縮沒有變成「全面變短」
   echoOff: number; // 模型不回 t 的 chunk 數（回聲對位失效）
   echoRejects: number; // 回聲對位擋下並重譯的句次（F1 成效）
   warnings: number;
@@ -101,6 +105,7 @@ async function runOnce(videoId: string, model: string, source: string, outDir: s
     GEMINI_MODEL: model,
     ...(process.env.CHUNK_SIZE ? { CHUNK_SIZE: process.env.CHUNK_SIZE } : {}),
     ...(process.env.TRANSLATE_PROTOCOL ? { TRANSLATE_PROTOCOL: process.env.TRANSLATE_PROTOCOL } : {}),
+    ...(process.env.CPS_BUDGET ? { CPS_BUDGET: process.env.CPS_BUDGET } : {}),
   } as JobEnv;
 
   const t0 = Date.now();
@@ -124,6 +129,17 @@ async function runOnce(videoId: string, model: string, source: string, outDir: s
     cues: cues.length,
     untranslated: cues.filter((c) => c.untranslated).length,
     drift: countIn(bil.hints, /漂移/),
+    cpsOver: countIn(bil.hints, /字\/秒/),
+    budgeted: (() => {
+      const ss = (JSON.parse(SUBS.store.get(`subs/${videoId}/sentences.json`)?.value ?? '{}').sentences ?? []) as Array<
+        Parameters<typeof charBudget>[0]
+      >;
+      return process.env.CPS_BUDGET === 'off' ? 0 : ss.filter((s, i) => charBudget(s, ss[i + 1]) !== undefined).length;
+    })(),
+    zhMedian: (() => {
+      const ls = cues.map((c) => String((c as { zh?: string }).zh ?? '').length).sort((a, b) => a - b);
+      return ls.length ? ls[Math.floor(ls.length / 2)] : 0;
+    })(),
     echoOff: countIn(bil.hints, /回聲對位未生效/),
     echoRejects: countIn(bil.hints, /回聲對位攔下/),
     warnings: (bil.warnings ?? []).length,
@@ -170,7 +186,7 @@ async function main() {
     runs.push(m);
     console.log(
       `[${model}] #${i} status=${m.status} ${m.elapsed}s cues=${m.cues} 未譯=${m.untranslated} ` +
-        `漂移=${m.drift} echoOff=${m.echoOff} warn=${m.warnings} tokens=${m.tokens}（prompt ${m.promptTokens}／思考 ${m.thoughtTokens}）NT$${m.estNTD}`
+        `漂移=${m.drift} CPS超標=${m.cpsOver} 標了預算=${m.budgeted} 中位字數=${m.zhMedian} warn=${m.warnings} tokens=${m.tokens}（prompt ${m.promptTokens}／思考 ${m.thoughtTokens}）NT$${m.estNTD}`
     );
   }
 
@@ -181,9 +197,10 @@ async function main() {
     repeat,
     chunkSize: process.env.CHUNK_SIZE ?? '(default)',
     protocol: process.env.TRANSLATE_PROTOCOL ?? 'id',
+    cpsBudget: process.env.CPS_BUDGET ?? 'on',
     runs,
     variance: Object.fromEntries(
-      (['untranslated', 'drift', 'echoOff', 'echoRejects', 'warnings', 'tokens', 'estNTD', 'retries'] as const).map((k) => [
+      (['untranslated', 'drift', 'cpsOver', 'budgeted', 'zhMedian', 'echoOff', 'echoRejects', 'warnings', 'tokens', 'estNTD', 'retries'] as const).map((k) => [
         k,
         stats(runs.map((r) => r[k])),
       ])

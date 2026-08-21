@@ -11,7 +11,9 @@ import type { GlossaryEntry } from './pipeline';
 
 // v5：翻譯輸出加回聲欄位 t（原文前 12 字元），讓「這句譯文對到哪句原文」可驗證
 //（docs/future-ideas.md F1 — 子句邊界漂移與 id 對滑的共同修法）
-export const PROMPT_VERSION = 'v5';
+// v6：字幕閱讀速度預算 [≤N 字]（docs/subtitle-readability.md R1）—— 顯示時間換算成
+//     字數上限，讓模型自己壓縮；只標在時間吃緊的句子上
+export const PROMPT_VERSION = 'v6';
 
 // handoff §4.4 對照表。左：禁用（中國用語），右：台灣慣用。程式端掃描 + prompt 內文皆用此表。
 export const BANNED_WORDS: Array<[string, string]> = [
@@ -120,13 +122,17 @@ ${extraHint ? `\n特別注意：${extraHint}\n` : ''}
 ${chunk.before.map((s) => s.text).join('\n') || '（無）'}
 
 請翻譯下列句子，id 必須原樣對應、一句不缺：
-${chunk.target.map((s) => `${s.id}: ${s.text}`).join('\n')}
+${chunk.target.map((s) => `${s.id}: ${s.budget ? `[≤${s.budget} 字] ` : ''}${s.text}`).join('\n')}
 
 下文（僅供銜接語氣，不要翻譯）：
 ${chunk.after.map((s) => s.text).join('\n') || '（無）'}
 
 輸出：純 JSON 陣列，無 markdown 圍欄、無說明文字。格式：
 [{"id":0,"t":"原文前 12 個字元","zh":"中文翻譯","note":"選填譯註"}]
+
+句子前面的「[≤N 字]」是**該句字幕的顯示時間只夠讀 N 個字**（觀眾來不及讀完就換頁了）。
+把它當**上限**：砍掉可有可無的贅詞、語助詞、重複的主詞，保住實際資訊。
+沒有標的句子不受限制。這個標記本身不要翻譯、不要出現在譯文裡。
 
 t 欄位（必填，不可省略）：把該 id 的**原文**開頭原樣照抄約 12 個字元 —— 不要翻譯、不要改寫、
 不要補全成完整句子。這是用來確認你沒有把譯文對到別句的回聲欄位；對不上的句子會被丟棄重譯。`;

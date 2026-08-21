@@ -114,6 +114,8 @@ describe('詞級斷句（segs → 句子自帶精準起訖）', () => {
     ];
     const ss2 = segmentCues(plain);
     expect(ss2.length).toBe(2);
-    expect(ss2[0].start).toBeUndefined(); // 舊路徑不帶自 timing，由 assemble 從 cue 推
+    // cue 級路徑的起訖來自 cue 邊界（精度不如詞級，但是真實時間）
+    expect(ss2[0]).toMatchObject({ start: 0, end: 2 });
+    expect(ss2[1]).toMatchObject({ start: 2, end: 4 });
   });
 });

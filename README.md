@@ -73,8 +73,11 @@ Caption track 有四個層級，每層是不同的題目（詳見 [docs/handoff-
 - **未譯句自動補譯**：翻完自己檢查（未譯旗標／原文照抄，deterministic），只重譯那幾句、
   最多 2 輪；儀表板顯示「⚠ N 句未譯」+ **✏補譯** 鈕
   （[docs/patch-untranslated.md](docs/patch-untranslated.md)）
+- **字幕閱讀速度**：顯示時間換算成字數上限寫進 prompt（12 字/秒），讓模型自己壓縮 ——
+  實測讀不完的句子少 29%、成本不變、沒被標的句子完全不動
+  （[docs/subtitle-readability.md](docs/subtitle-readability.md) §3.1；`CPS_BUDGET=off` 可關）
 
-prompt 目前 **v5**；worker 測試 **156 個**。品質防線與所有實證教訓見
+prompt 目前 **v6**；worker 測試 **162 個**。品質防線與所有實證教訓見
 **[docs/lessons-learned.md](docs/lessons-learned.md)**；合併決策材料見
 [docs/kvsplayer-merge-todo.md](docs/kvsplayer-merge-todo.md)。
 
@@ -102,7 +105,7 @@ video 路由的影片另有**字卡層**（🃏 疊畫面上緣、逐句稿有�
 |---|---|---|---|
 | **播放畫質 B 案** | [video-quality.md](docs/video-quality.md) | 1 天 | A 案（劇場模式）已解尺寸門檻。要 4K／Premium 只剩「ext 在 youtube.com 原生頁疊字幕」——僅桌機、且要**兩套渲染並存**，維護成本高 |
 | **Glossary G2 養表流程** | [glossary-layers.md](docs/glossary-layers.md) §6 | 半天 | 儀表板編輯 + 「把自動抽的好譯法一鍵收進頻道表」。E2 已證明頻道表對模型真的有約束力（0/7 → 6/7 句），所以這筆投資現在有回報 |
-| **字幕可讀性 R1–R4** | [subtitle-readability.md](docs/subtitle-readability.md) | 兩天半 | 實測尾巴 3% 的句子同時違反三條業界規範（最糟 18 CPS = Netflix 上限兩倍、36 字擠一行、單句掛 14 秒）。R1 用 prompt 給字數預算壓縮譯文（治本、近乎零成本）、R2 折行與拆塊、R3 前一句留著（行數預算 + 三態設定）、**R4 兩顆事後套用按鈕**（✂ 修排版零 LLM、📏 壓縮過長句以句計價）|
+| **字幕可讀性 R2–R4**（R1 已上線）| [subtitle-readability.md](docs/subtitle-readability.md) | 兩天 | 實測尾巴 3% 的句子同時違反三條業界規範（最糟 18 CPS = Netflix 上限兩倍、36 字擠一行、單句掛 14 秒）。**R1 已實測上線**（CPS>12 -29%、tokens +0.3%）；剩 R2 折行與拆塊、R3 前一句留著（行數預算 + 三態設定）、R4 兩顆事後套用按鈕（✂ 修排版零 LLM、📏 壓縮過長句以句計價）|
 | **子句邊界漂移** | 只有方向，還沒有計畫 | 大 | F1 實測證實回聲對位管不到它。可能的方向是「翻譯前先把 ASR 碎片合併成完整句、翻完再按詞級時間切回 cue」—— 比回聲對位大得多的改動，先觀察它到底多礙眼再說 |
 
 ### B. 程式做完了、等你動手驗收（都是 5 分鐘內的事）
