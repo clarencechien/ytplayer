@@ -39,7 +39,9 @@ Caption track 有四個層級，每層是不同的題目（詳見 [docs/handoff-
    「⚠ N 句未譯」，按該列的「✏ 補譯」再補一次（只重譯那幾句，不重跑整片）
 5. 字幕「來不及讀」：`/admin` 該列顯示「⏩ N 句讀不完」時按「📏 壓縮 N」
    （只重譯超標那幾句，以句計價；壓出來更長就保留原譯）
-6. 舊片字幕「太快消失」：`/admin` 儀表板該列按「⏱ 修時間」（零 LLM 費用、冪等可重按）。
+6. 字幕「一行太長／想回頭看前一句」：player 按鈕列的「前一句：自動」——
+   自動＝畫面行數有剩才顯示（關掉原文時它自然出現）。點前一句可跳回那句重播
+7. 舊片字幕「太快消失」：`/admin` 儀表板該列按「⏱ 修時間」（零 LLM 費用、冪等可重按）。
    ASR 句界要貼齊語音則需 **ext 更新後重新 ingest**（詞級時間，見
    [docs/subtitle-timing.md](docs/subtitle-timing.md)）
 
@@ -82,7 +84,13 @@ Caption track 有四個層級，每層是不同的題目（詳見 [docs/handoff-
   production 實績：兩支舊片 11→3、16→0，**合計只花 NT$1.55**（整片重翻要 NT$32）
   （[docs/subtitle-readability.md](docs/subtitle-readability.md) §3.1、§6；`CPS_BUDGET=off` 可關）
 
-prompt 目前 **v6**；worker 測試 **175 個**。品質防線與所有實證教訓見
+- **字幕排版行數預算**：字幕區能給幾行隨情境變動（桌機/劇場 4、手機直向 3、手機橫向 2），
+  超出時**由下往上砍**：先砍系統自己加的「前一句」、再縮字級，**原文與譯註永遠不砍**。
+  中文一行 16 全形字自動折行；「前一句」是三態（自動/開/關），點它跳回重播。
+  Chromium 實測真實語料 786 句：桌機 0% 超支、手機直向 ≤1%
+  （[docs/adr-001-line-budget.md](docs/adr-001-line-budget.md)）
+
+prompt 目前 **v6**；worker 測試 **189 個**。品質防線與所有實證教訓見
 **[docs/lessons-learned.md](docs/lessons-learned.md)**；合併決策材料見
 [docs/kvsplayer-merge-todo.md](docs/kvsplayer-merge-todo.md)。
 
@@ -110,7 +118,7 @@ video 路由的影片另有**字卡層**（🃏 疊畫面上緣、逐句稿有�
 |---|---|---|---|
 | **播放畫質 B 案** | [video-quality.md](docs/video-quality.md) | 1 天 | A 案（劇場模式）已解尺寸門檻。要 4K／Premium 只剩「ext 在 youtube.com 原生頁疊字幕」——僅桌機、且要**兩套渲染並存**，維護成本高 |
 | **Glossary G2 養表流程** | [glossary-layers.md](docs/glossary-layers.md) §6 | 半天 | 儀表板編輯 + 「把自動抽的好譯法一鍵收進頻道表」。E2 已證明頻道表對模型真的有約束力（0/7 → 6/7 句），所以這筆投資現在有回報 |
-| **字幕可讀性 R2–R3**（R1、R4b、R5 已上線）| [subtitle-readability.md](docs/subtitle-readability.md) | 1.5 天 | 實測尾巴 3% 的句子同時違反三條業界規範（最糟 18 CPS = Netflix 上限兩倍、36 字擠一行、單句掛 14 秒）。**R1 已實測上線**（CPS>12 -29%、tokens +0.3%），**R4b 📏壓縮鈕 + R5 零成本剝夾註**讓舊片也修得掉（實績 11→3、16→0，兩支共 NT$1.55）；剩 R2 折行與拆塊、R3 前一句留著（行數預算 + 三態設定）、R4a ✂修排版（綁 R2b，R2b 不做就不用做）|
+| **字幕可讀性 R2b**（其餘全部已上線）| [subtitle-readability.md](docs/subtitle-readability.md) | 半天～一天 | 實測尾巴 3% 的句子同時違反三條業界規範（最糟 18 CPS = Netflix 上限兩倍、36 字擠一行、單句掛 14 秒）。**R1 已實測上線**（CPS>12 -29%、tokens +0.3%），**R4b 📏壓縮鈕 + R5 零成本剝夾註**讓舊片也修得掉（實績 11→3、16→0，兩支共 NT$1.55）；剩 **R2b 資料層拆句**（+ 綁在它上面的 R4a）。R2a 折行 + R3 行數預算已上線並實測（桌機／手機直向 0% 超支）；**R2b 現在只剩一個理由**：手機橫向看雙語時 41% 的句子佔 3 行以上。不常這樣看片就不用做（[adr-001](docs/adr-001-line-budget.md)）|
 | **子句邊界漂移** | 只有方向，還沒有計畫 | 大 | F1 實測證實回聲對位管不到它。可能的方向是「翻譯前先把 ASR 碎片合併成完整句、翻完再按詞級時間切回 cue」—— 比回聲對位大得多的改動，先觀察它到底多礙眼再說 |
 
 ### B. 程式做完了、等你動手驗收（都是 5 分鐘內的事）
@@ -162,6 +170,7 @@ video 路由的影片另有**字卡層**（🃏 疊畫面上緣、逐句稿有�
 | [docs/model-reeval-sop.md](docs/model-reeval-sop.md) | **模型重評 SOP**：觸發條件、固定五步、判讀規則（候選 mean 要超出基準 min–max）|
 | [docs/exp-2026-08-16.md](docs/exp-2026-08-16.md) | **上線後補測**：G1 頻道表約束力、3.6-flash 重評、lite × 協定總表（含還沒測的誠實清單）|
 | [docs/patch-untranslated.md](docs/patch-untranslated.md) | **未譯句自動偵測 + 補譯**：三種病因解剖、P0 預防、P1 補譯步驟（後來一般化成 `?mode=`）、實測 |
+| [docs/adr-001-line-budget.md](docs/adr-001-line-budget.md) | **ADR：字幕排版用「行數預算」不用開關**：為什麼是預算不是開關、砍的順序是權限問題、Chromium 實測 7 種情境、「縮字級不會減少行數」的坑 |
 | [docs/subtitle-readability.md](docs/subtitle-readability.md) | **字幕可讀性計畫**：Netflix 繁中規範（16 字/行、2 行、9 CPS）對照實測、R1 壓縮譯文／R2 折行拆塊／R3 行數預算 roll-up／R4 舊片事後套用／R5 剝夾註。§3.2 有 R4b 上線後的實戰數據與「剩下壓不動的是什麼」 |
 | [docs/privacy-hardening.md](docs/privacy-hardening.md) | **隱私三層**：workers.dev 關閉、UA 爬蟲閘門、Managed Challenge 的正確設法與雷區 |
 | [docs/glossary-layers.md](docs/glossary-layers.md) | Glossary 疊層（channel/genre/per-video）：G1+G3 已實作、G2 未做 |
