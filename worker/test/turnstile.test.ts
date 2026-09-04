@@ -6,6 +6,7 @@ import {
   passValid,
   readCookie,
   safeNext,
+  safeEqual,
   passCookie,
   challengePage,
   PASS_COOKIE,
@@ -78,5 +79,43 @@ describe('challengePage', () => {
 
   it('site key 有跳脫（外部值一律當敵意輸入）', () => {
     expect(challengePage('a"><script>x</script>', '/')).not.toContain('<script>x</script>');
+  });
+});
+
+describe('safeNext — 反斜線也是外站', () => {
+  it('放行站內路徑', () => {
+    expect(safeNext('/watch/abc')).toBe('/watch/abc');
+    expect(safeNext('/a?b=1#c')).toBe('/a?b=1#c');
+  });
+
+  it('擋掉 protocol-relative 與反斜線變體', () => {
+    // 瀏覽器會把 /\evil 正規化成 //evil，所以只擋 // 是不夠的
+    expect(safeNext('//evil.example')).toBe('/');
+    expect(safeNext('/\\evil.example')).toBe('/');
+    expect(safeNext('/\\\\evil.example')).toBe('/');
+  });
+
+  it('非字串與非絕對路徑一律回 /', () => {
+    expect(safeNext('https://evil.example')).toBe('/');
+    expect(safeNext('watch/abc')).toBe('/');
+    expect(safeNext(undefined)).toBe('/');
+    expect(safeNext(123)).toBe('/');
+  });
+});
+
+describe('safeEqual — 定時比較', () => {
+  it('相同就是 true', () => {
+    expect(safeEqual('abc', 'abc')).toBe(true);
+    expect(safeEqual('', '')).toBe(true);
+    expect(safeEqual('中文金鑰', '中文金鑰')).toBe(true);
+  });
+
+  it('不同、長度不同、undefined 都是 false', () => {
+    expect(safeEqual('abc', 'abd')).toBe(false);
+    expect(safeEqual('abc', 'abcd')).toBe(false);
+    expect(safeEqual('abc', '')).toBe(false);
+    expect(safeEqual(undefined, 'abc')).toBe(false);
+    expect(safeEqual('abc', undefined)).toBe(false);
+    expect(safeEqual(undefined, undefined)).toBe(false);
   });
 });

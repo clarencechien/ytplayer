@@ -28,6 +28,7 @@ import {
   passCookie,
   readCookie,
   safeNext,
+  safeEqual,
   PASS_COOKIE,
 } from './turnstile';
 import { accessEmail } from './access';
@@ -159,10 +160,22 @@ export default {
     // 是靜默的。改成 fail-closed：沒設 key 就沒有 key 認證這條路。
     const keyOk =
       keyConfigured &&
-      (req.headers.get('x-ingest-key') === env.INGEST_KEY ||
-        (isPage && url.searchParams.get('key') === env.INGEST_KEY));
+      (safeEqual(req.headers.get('x-ingest-key') ?? undefined, env.INGEST_KEY) ||
+        (isPage && safeEqual(url.searchParams.get('key') ?? undefined, env.INGEST_KEY)));
 
     const authorized = keyOk || accessOk;
+
+    // 跨站的 <form> POST 只能送這三種 content-type,其他一律要先過 preflight。
+    // 所以「拒收這三種」就等於「拒收瀏覽器發起的跨站寫入」,而且不會擋到
+    // curl —— README 教的 `curl -X POST …/translate/<id>?force=1` 沒有 body、
+    // 也沒有 content-type,照樣通過。
+    //
+    // 現在不可利用:授權要嘛靠 x-ingest-key(跨站送不出去),要嘛靠 Access JWT,
+    // 而 Access 只蓋 /admin。但只要 Access 的範圍變大,這就會變成 CSRF 面。
+    const SIMPLE_CT = /^(?:application\/x-www-form-urlencoded|multipart\/form-data|text\/plain)\b/i;
+    if (req.method === 'POST' && SIMPLE_CT.test(req.headers.get('content-type') ?? '')) {
+      return json({ ok: false, error: 'unsupported media type' }, 415);
+    }
     const warning = keyConfigured ? undefined : '尚未設定 INGEST_KEY secret，需要授權的端點一律拒絕';
 
     const html = (body: string) =>
