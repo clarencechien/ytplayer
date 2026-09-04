@@ -19,8 +19,13 @@
    2026-09-04 ext 送片 `Failed to fetch` 就是它（challenge 頁沒有 CORS 標頭 →
    跨來源 fetch 讀不到）。zone 規則要跟 Worker 的分界一致：**challenge 只該守頁面**
    （`/`、`/watch/*`、`/admin`、`/share`），API 與 `OPTIONS` 預檢要 Skip
-   （修法與完整診斷：privacy-hardening.md §6）
-   **看到 403 帶 `cf-mitigated` 就不是 Worker 回的，別去程式裡找**
+   （修法與完整診斷：privacy-hardening.md §6）。**Pro 的 Super Bot Fight Mode 同理** ——
+   ext/ab-runner/curl 都算「Definitely automated」。一條 **Skip 規則**（勾選
+   All remaining custom rules + Super Bot Fight Mode，放最上面）同時解掉兩者，
+   因為 custom rules 跑在 SBFM 之前。**SBFM 的 Verified bots 要維持 Allow**
+   （擋掉 Googlebot 就讀不到 noindex，同一個陷阱）
+   **看到 403 帶 `cf-mitigated` 就不是 Worker 回的，別去程式裡找 ——
+   先看 Security → Events 的 by service 與時間軸**
 4. **LLM 工作只能在 queue consumer 跑**（fetch handler 含 waitUntil 會被砍 — 實測）；
    cron 是零成本看門狗，永不碰 LLM
 5. **花費保險絲四層**不可拆：Google prepay → 每步 3 次重試永久失敗 → 每片 token 上限
