@@ -123,6 +123,7 @@ video 路由的影片另有**字卡層**（🃏 疊畫面上緣、逐句稿有�
 | **播放畫質 B 案** | [video-quality.md](docs/video-quality.md) | 1 天 | A 案（劇場模式）已解尺寸門檻。要 4K／Premium 只剩「ext 在 youtube.com 原生頁疊字幕」——僅桌機、且要**兩套渲染並存**，維護成本高 |
 | **Glossary G2 養表流程** | [glossary-layers.md](docs/glossary-layers.md) §6 | 半天 | 儀表板編輯 + 「把自動抽的好譯法一鍵收進頻道表」。E2 已證明頻道表對模型真的有約束力（0/7 → 6/7 句），所以這筆投資現在有回報 |
 | **字幕可讀性 R2b**（其餘全部已上線）| [subtitle-readability.md](docs/subtitle-readability.md) | 半天～一天 | 實測尾巴 3% 的句子同時違反三條業界規範（最糟 18 CPS = Netflix 上限兩倍、36 字擠一行、單句掛 14 秒）。**R1 已實測上線**（CPS>12 -29%、tokens +0.3%），**R4b 📏壓縮鈕 + R5 零成本剝夾註**讓舊片也修得掉（實績 11→3、16→0，兩支共 NT$1.55）；剩 **R2b 資料層拆句**（+ 綁在它上面的 R4a）。R2a 折行 + R3 行數預算已上線並實測（桌機／手機直向 0% 超支）；**R2b 現在只剩一個理由**：手機橫向看雙語時 41% 的句子佔 3 行以上。不常這樣看片就不用做（[adr-001](docs/adr-001-line-budget.md)）|
+| **清單頁規模上限**（觸發式）| [list-scaling.md](docs/list-scaling.md) | 半天 | **影片數接近 100、或 `/videos.json` 超過 3 秒才做**。並行讀已上線（5–8s → 1.7s），但那只改了常數：仍是 O(N) 次 R2 GET，⌈N/10⌉ 趟來回。到時候改成 customMetadata + 一次 `list()`（**不要**做單一 list.json —— read-modify-write 會安靜地漏掉影片）|
 | **子句邊界漂移** | 只有方向，還沒有計畫 | 大 | F1 實測證實回聲對位管不到它。可能的方向是「翻譯前先把 ASR 碎片合併成完整句、翻完再按詞級時間切回 cue」—— 比回聲對位大得多的改動，先觀察它到底多礙眼再說 |
 
 ### B. 程式做完了、等你動手驗收（都是 5 分鐘內的事）
@@ -177,6 +178,7 @@ video 路由的影片另有**字卡層**（🃏 疊畫面上緣、逐句稿有�
 | [docs/model-reeval-sop.md](docs/model-reeval-sop.md) | **模型重評 SOP**：觸發條件、固定五步、判讀規則（候選 mean 要超出基準 min–max）|
 | [docs/exp-2026-08-16.md](docs/exp-2026-08-16.md) | **上線後補測**：G1 頻道表約束力、3.6-flash 重評、lite × 協定總表（含還沒測的誠實清單）|
 | [docs/patch-untranslated.md](docs/patch-untranslated.md) | **未譯句自動偵測 + 補譯**：三種病因解剖、P0 預防、P1 補譯步驟（後來一般化成 `?mode=`）、實測 |
+| [docs/list-scaling.md](docs/list-scaling.md) | **清單頁的規模上限**：為什麼 5–8 秒、並行讀只治標、100 支之後改用 customMetadata + 一次 list，以及為什麼不做單一 list.json |
 | [docs/adr-001-line-budget.md](docs/adr-001-line-budget.md) | **ADR：字幕排版用「行數預算」不用開關**：為什麼是預算不是開關、砍的順序是權限問題、Chromium 實測 7 種情境、「縮字級不會減少行數」的坑 |
 | [docs/subtitle-readability.md](docs/subtitle-readability.md) | **字幕可讀性計畫**：Netflix 繁中規範（16 字/行、2 行、9 CPS）對照實測、R1 壓縮譯文／R2 折行拆塊／R3 行數預算 roll-up／R4 舊片事後套用／R5 剝夾註。§3.2 有 R4b 上線後的實戰數據與「剩下壓不動的是什麼」 |
 | [docs/privacy-hardening.md](docs/privacy-hardening.md) | **隱私三層**：workers.dev 關閉、UA 爬蟲閘門、Managed Challenge 的正確設法與雷區 |

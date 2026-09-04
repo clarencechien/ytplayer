@@ -55,14 +55,16 @@
   —— `untranslated`＝未譯／原文照抄（預設，assemble 自動接的那條）；`cps`＝顯示時間讀不完的句子壓短
 - 進度/花費：`/subs/{id}/status.json`、`/admin` 儀表板
 - 清單頁的資料是 `/videos.json` → R2 逐支 `subs/{id}/info.json`（**分批並行讀**，
-  循序跑 31 支要 5–8 秒，那就是「開站一直 loading」的成因）；`/jobs.json` 同理
+  循序跑 34 支要 5–8 秒，那就是「開站一直 loading」的成因）；`/jobs.json` 同理。
+  並行只改常數不改複雜度 —— **影片數接近 100 再看 docs/list-scaling.md**
 - 部署：merge 到 main → Workers Builds 自動部署（production branch 設定在 CF dashboard）
 
 ## 待辦與懸案
 
 **完整 backlog 看 [README.md](README.md) 的「還剩什麼沒做」段**：目前只剩 **畫質 B 案**、
 **glossary G2**（儀表板編輯／一鍵收進頻道表）、**字幕可讀性 R2b**（資料層拆句 —— 只剩「手機橫向看雙語 41% 佔 3 行以上」一個理由）、**F2 lite A/B**（程式好了缺證據）、
-**3.6-flash 重評**（F1 上線後前提已備妥）。
+**3.6-flash 重評**（F1 上線後前提已備妥）、
+**清單頁規模上限**（觸發式：影片數接近 100 才做，docs/list-scaling.md）。
 
 已完成收工（別重做）：M0–M5 全部（kvsplayer 已關閉、合併結案）、畫質 A 案（劇場模式）、
 成本優化 L1+L2（單片 -51%）、PWA 手機送片、**glossary 疊層 G1 + F1–F4**（2026-08-16）、
