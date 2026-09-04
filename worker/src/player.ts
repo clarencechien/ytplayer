@@ -289,7 +289,7 @@ export function watchPage(videoId: string): string {
   </div>
 </div>
 <script>
-var VID = ${JSON.stringify(videoId)};
+var VID = ${JSON.stringify(videoId).replace(/</g, '\\u003c')};
 var MODES = [["both","字幕：雙語"],["zh","字幕：只中"],["en","字幕：只原文"],["off","字幕：無"]];
 var OFF = 3, ALPHAS = [1, 0.75, 0.5, 0.25], SPEEDS = [0.75, 1, 1.25, 1.5, 1.75, 2];
 // mobile 偵測：touch 為主、UA 為輔
@@ -545,6 +545,8 @@ function createYT() {
   });
 }
 
+// 任何要進 innerHTML 的外來字串都得先過這裡（字幕本體走 textContent，不經過這條路）
+function esc(v) { var d = document.createElement("span"); d.textContent = String(v == null ? "" : v); return d.innerHTML; }
 function fmtTime(t) {
   t = Math.floor(t);
   var m = Math.floor(t / 60), s = t % 60;
@@ -559,8 +561,12 @@ function load() {
         .catch(function () { return null; })
         .then(function (st) {
           var msg = '這支影片的翻譯還沒好。此頁會自動重試…';
-          if (st && st.failed) msg = '⚠ 翻譯失敗：' + (st.failReason || '未知原因') + '<br>可用 /translate/' + VID + '?force=1 重跑。';
-          else if (st && st.stage) msg = '翻譯中：' + st.stage + (st.step ? '（' + st.step + '）' : '') + '。此頁會自動重試…';
+          // ⚠ status.json 一律當敵意輸入：failReason 是例外訊息，而例外訊息會帶
+          // **模型輸出的開頭**（pipeline.ts 的「LLM 輸出無法解析為 JSON（開頭：…）」）
+          // 與 Gemini API 的回應內容。字幕是外部可控輸入 → prompt injection 可以一路
+          // 走到這裡；沒 escape 的話就是同源 XSS，而同源存著 INGEST_KEY（localStorage）
+          if (st && st.failed) msg = '⚠ 翻譯失敗：' + esc(st.failReason || '未知原因') + '<br>可用 /translate/' + VID + '?force=1 重跑。';
+          else if (st && st.stage) msg = '翻譯中：' + esc(st.stage) + (st.step ? '（' + esc(st.step) + '）' : '') + '。此頁會自動重試…';
           else msg += '<br>還沒 ingest 的話：到 YouTube 開這支影片 → 開 CC 選原文軌 → 點 ext 送出。';
           list.innerHTML = '<div class="msg">' + msg + '</div>';
         });

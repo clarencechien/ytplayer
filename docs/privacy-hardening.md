@@ -238,3 +238,87 @@ Access 登入是**跨 application SSO**：認證完會逐一造訪帳號下每�
 
 殘餘風險不變且已接受：**拿到 `/watch/{id}` 連結的人看得到那支影片的字幕**。
 真的要關掉這條，得讓 `/watch` 也走 key-gate —— 但那就不能分享了，是另一個取捨。
+
+## 5. 攻擊面盤點（2026-08-21）：字幕是外部可控輸入
+
+前四層擋的是「別人看到我看了什麼」。這一節處理另一個維度：
+**字幕內容本身是任何人都能上傳的東西** —— 只要你翻了一支對方準備好的影片，
+他的字幕就進了你的 pipeline，而且不需要任何憑證外洩。
+
+三個檢查點與結論：
+
+### 5.1 字幕會不會變成可執行內容？ → 主要路徑乾淨，**但有一條漏網的**
+
+字幕本體從頭到尾走 `textContent`：
+逐句稿的骨架是固定字串再用 `querySelector(...).textContent` 填、
+字幕帶 `subZh/subEn/subNote.textContent`、字卡層 `d.textContent`、
+清單頁標題 `t.textContent`。這部分沒問題。
+
+**漏網的是 `status.json`**（已修，commit 見本節日期）：
+
+```
+字幕（外部輸入）→ prompt injection → 模型輸出
+  → JSON 解析失敗，錯誤訊息帶「開頭：<模型輸出前 80 字>」（pipeline.ts）
+  → 連續失敗 3 次 → failStatus() 寫進 status.failReason
+  → /watch 頁把它塞進 innerHTML   ← **同源 XSS**
+  → 同源的 localStorage 裡就是 INGEST_KEY
+```
+
+不需要任何憑證外洩，只要你翻一支對方給的影片。`/admin` 那邊本來就有 `esc()`，
+只有 player 頁漏掉。修法：player 頁補 `esc()`，並把
+**「status.json 一律當敵意輸入」**寫進註解 —— 它有一部分內容來自模型。
+
+> 通則：`textContent` 是預設，`innerHTML` 是例外。用 `innerHTML` 時，
+> 插值的每一個變數都要問「這個字串最遠可以追到哪裡」——
+> `failReason` 看起來像自家字串，追到底是模型輸出。
+
+### 5.2 R2 會不會變成「在自己網域上掛任意內容」？ → 不會
+
+- R2 **只有 binding**（`wrangler.jsonc` 的 `r2_buckets`），沒有公開 bucket、沒掛 domain
+- 對外只有一條路：`GET /subs/{11 碼 videoId}/{白名單檔名}`，
+  而且 **content-type 由 Worker 決定**（`.srt` → `text/plain`，其餘 → `application/json`），
+  不是跟著物件走 —— 所以塞不出 `text/html`
+- 寫入路徑的 key 也都是程式產的（`subs/{videoId}/…`），videoId 一律過 regex
+
+⚠ 這是**程式碼**的結論。R2 也可以在 dashboard 上被打開公開存取（`r2.dev` 或自訂網域），
+那個設定看不到在 repo 裡 —— **值得去 dashboard 確認一次 bucket 沒有 public access**。
+
+### 5.3 擴充功能：權限本身比字幕值錢
+
+`host_permissions` 是 `*://*.youtube.com/*`，而且 `getState()` 會用
+`credentials: 'include'` 抓 `location.href` —— 也就是**讀得到你登入狀態下的 YouTube 頁面**。
+這是整個專案裡最有價值的憑證，比 R2 token 高一個量級。
+
+現況（都符合預期，不用改）：
+
+- load unpacked、自用，不經 Chrome Web Store —— 沒有「更新被劫持」的路徑，
+  代價是換機器要自己裝
+- `INGEST_KEY` 存 `chrome.storage.local`，只送去 `cfg.workerUrl`（使用者自己填的）
+- `bridge.js` 收 postMessage 時有驗 `e.source !== window || e.origin !== location.origin`
+- `intercept.js` 的 postMessage targetOrigin 是 `location.origin`（不是 `*`）
+
+殘餘風險（接受）：`intercept.js` 在 MAIN world，同頁面任何腳本都收得到那則
+timedtext postMessage —— 但那是該頁自己的字幕，YouTube 本來就有。
+
+### 5.4 順手收掉的兩件事
+
+- **`?key=` 只認頁面路由**：瀏覽器設不了 header，所以清單頁需要 `/?key=` bootstrap，
+  但 API 沒有這個需求。網址帶 key 會留在瀏覽紀錄、分享出去的連結、Referer 與各層日誌裡
+- **HTML 頁面加安全標頭**：`nosniff`、`no-referrer`，以及分成兩段的 CSP
+  - 強制執行：`object-src/base-uri/form-action/frame-ancestors` 全 `'none'` ——
+    這幾條不可能弄壞 YouTube 內嵌，容器裡驗得完
+  - **Report-Only**：`default-src/script-src/connect-src/img-src/frame-src`。
+    真正的縱深防禦在 `connect-src` 與 `img-src` 只給 `'self'`：
+    就算哪天真的被塞進一段 script，**金鑰也送不出去**。
+    但這幾條寫錯就是「播放器靜默壞掉」，而這個容器的 proxy 擋掉了瀏覽器對
+    youtube.com 的連線（curl 可以、Chromium 不行 → `ERR_CONNECTION_RESET`），
+    **在這裡驗不到**。所以先 Report-Only —— 沒驗過的東西不強制執行。
+
+> **待人工確認（兩件）**：
+> 1. 真瀏覽器開 `/watch/{id}`，devtools console 看有沒有
+>    `Content Security Policy ... report only` 的訊息。沒有的話，把 `CSP_CANDIDATE`
+>    併進 `CSP_ENFORCED`（`worker/src/index.ts`），縱深防禦才真的生效
+> 2. Cloudflare dashboard → R2 → `ytplayer-subs` → 確認沒有開 public access
+>
+> 驗收腳本：`node worker/scripts/csp-check.mjs`（會明講哪幾條「測不到」，
+> 不會拿測不到當通過）

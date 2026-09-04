@@ -21,14 +21,18 @@
    cron 是零成本看門狗，永不碰 LLM
 5. **花費保險絲四層**不可拆：Google prepay → 每步 3 次重試永久失敗 → 每片 token 上限
    （計數跨重排累計，別改回歸零）→ 全域日預算。花費可視：`/health`、`/admin` 儀表板
-6. 模型輸出視為敵意輸入 — 品質地板靠 deterministic 檢查（`sanityCheckItem`、禁用詞三層、
+6. **字幕與 status.json 都是外部可控輸入** —— 字幕來自任何人都能上傳的影片，
+   而 `failReason` 會帶模型輸出的開頭。`textContent` 是預設、`innerHTML` 是例外，
+   插值前一定 `esc()`（2026-08-21 修掉一條 prompt injection → 同源 XSS → 偷 INGEST_KEY
+   的完整鏈路，docs/privacy-hardening.md §5）
+7. 模型輸出視為敵意輸入 — 品質地板靠 deterministic 檢查（`sanityCheckItem`、禁用詞三層、
    `assertIdSanity`、**回聲對位 `t`**），不靠 LLM 自我審查。
    取捨原則：**寧可看得見地失敗（標 untranslated），也不要安靜地錯（譯文對到隔壁句）**
-7. 工作風格：**先計劃再動手**（大改動先落 docs/*.md 計畫）；實驗結論回填文件的決策欄
-8. **每個品質改善都要有「事後套用」的路徑** — 語料已經翻好了，`?force=1` 重跑整片是
+8. 工作風格：**先計劃再動手**（大改動先落 docs/*.md 計畫）；實驗結論回填文件的決策欄
+9. **每個品質改善都要有「事後套用」的路徑** — 語料已經翻好了，`?force=1` 重跑整片是
    最貴也最笨的修法。既有模式：⏱ 修時間（零 LLM）、✏ 補譯與 📏 壓縮（以句計價）；
    新功能要問「舊片怎麼套？」（docs/subtitle-readability.md §6）
-9. **deterministic 的修法排在花錢的修法前面** — 📏 壓縮會先零成本剝掉英文夾註、
+10. **deterministic 的修法排在花錢的修法前面** — 📏 壓縮會先零成本剝掉英文夾註、
    重算一次才決定要不要送模型（實績：兩支舊片 11→3、16→0，共 NT$1.55，
    subtitle-readability.md §3.2）。
    同理：儀表板的數字要能被信任，一個顯示 bug（耗時用 updatedAt 算）會讓人
@@ -36,7 +40,7 @@
 
 ## 常用操作
 
-- 測試：`cd worker && npx vitest run`（189 個，push 前必綠）
+- 測試：`cd worker && npx vitest run`（193 個，push 前必綠）
 - 手動翻譯：`POST /translate/{id}?force=1`（key：`x-ingest-key`）；A/B 擂台：`&model=…`
 - 補譯：`POST /patch/{id}?mode=untranslated|cps|all`（只重譯有問題的句子，不重跑整片）
   —— `untranslated`＝未譯／原文照抄（預設，assemble 自動接的那條）；`cps`＝顯示時間讀不完的句子壓短
