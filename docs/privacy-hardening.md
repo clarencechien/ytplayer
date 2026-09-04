@@ -247,6 +247,9 @@ Access 登入是**跨 application SSO**：認證完會逐一造訪帳號下每�
 
 ## 5. 攻擊面盤點（2026-08-21）：字幕是外部可控輸入
 
+> 一頁圖版本：**[attack-surface.html](attack-surface.html)**（直接用瀏覽器開）——
+> 路人的四段動線、完整路由表、三項收斂。本節是文字版與推導過程。
+
 前四層擋的是「別人看到我看了什麼」。這一節處理另一個維度：
 **字幕內容本身是任何人都能上傳的東西** —— 只要你翻了一支對方準備好的影片，
 他的字幕就進了你的 pipeline，而且不需要任何憑證外洩。
@@ -431,3 +434,40 @@ challenge 該守的本來就只有 `/`、`/watch/*`、`/admin`、`/share`。
   才把範圍縮到既有那條規則
 - **錯誤回應也要帶 CORS**。不然使用者看到的永遠是 `Failed to fetch`，
   而不是「unauthorized」或「payload 超過 8MB」
+
+## 5.5 讀取面的收斂（2026-09-04）
+
+§5 處理的是「字幕會不會變成可執行內容」。這一節處理另一件事：
+**拿到一條 `/watch/{id}` 連結的人，本來就看得到那支片的字幕 —— 但不該連
+「花了多少錢、模型吐了什麼」一起看到。** 三個地方給得比需要的多，都收掉了。
+
+| 端點 | 之前 | 之後 |
+|---|---|---|
+| `/subs/{id}/status.json` | 全公開：模型、prompt 版本、token 用量、**failReason** | 公開版只有 `videoId`／`stage`／`step`／`failed`；帶 key 才是完整版 |
+| `/health` | 全公開：今日 token、呼叫次數、日上限、`ingestKeyConfigured` | 公開版只有 `service`／`ok`；其餘要 key |
+| `/subs/{id}/source.json` | 在公開白名單裡 | **移出白名單**，要 key |
+
+### 功能一點都沒少（這是重點）
+
+- **player 頁照樣顯示失敗原因**：watch 頁改成「localStorage 有金鑰就帶上」。
+  同源請求加 header 不會觸發預檢，所以零成本。自己人看得到完整原因，路人只看到「翻譯中／失敗」
+- **ext 的分層診斷照樣能用**：它只看 `j.service === 'ytplayer'`，那兩個欄位仍然公開
+- **ab-runner 照樣抓得到真實語料**：改成帶 `INGEST_KEY` header
+  （沒設的話會明確報「source.json 需要金鑰」，不是莫名其妙的 404）
+- `/admin` 那列的 `status` 連結用瀏覽器直接開會拿到遮蔽版 —— 但**儀表板那一列本來就有**
+  花費與失敗原因（走 key-gated 的 `/jobs.json`），所以沒有損失
+
+### 為什麼 `source.json` 是整份移掉，不是遮蔽
+
+它是原始字幕軌 + 影片描述前 2000 字 —— **player 一個欄位都沒用到**，
+卻是公開資料量最大的一份。沒有使用端的東西，遮蔽不如不給。
+
+### 沒有動的那條
+
+**字幕本體（`bilingual.json` / `.srt`）維持公開** —— 那是「有連結就看得到」的
+既有取捨（§4 的殘餘風險），這次收斂的是「連結之外還多送了什麼」，不是取捨本身。
+要連字幕都關，得讓 `/watch` 走 key-gate，那就不能分享了。
+
+> 驗收在 `worker/test/fetch-handler.test.ts`「公開資料的邊界」：
+> 路人版不含 `failReason`／token／模型輸出、帶 key 版完整、
+> `source.json` 無 key 404 有 key 200、`bilingual.json` 維持公開。

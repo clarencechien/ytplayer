@@ -72,8 +72,9 @@ Caption track 有四個層級，每層是不同的題目（詳見 [docs/handoff-
 - **攻擊面**：字幕是外部可控輸入（任何人都能上傳一支帶特製字幕的影片）——
   字幕全程走 `textContent`；2026-08-21 修掉一條
   「prompt injection → 模型輸出進 `failReason` → `/watch` 的 innerHTML → 同源偷 INGEST_KEY」
-  的完整鏈路。另加 `?key=` 只認頁面路由、HTML 安全標頭 + CSP
-  （[§5](docs/privacy-hardening.md)）
+  的完整鏈路。另加 `?key=` 只認頁面路由、HTML 安全標頭 + CSP。
+  **讀取面也收斂過**：`status.json` 公開版只給進度、`/health` 的用量要 key、
+  `source.json` 移出公開白名單（[§5](docs/privacy-hardening.md)）
 - **glossary 疊層**：channel 鎖定表 > genre 通用表 > 當片自動抽，同 term 上層贏、合併上限 80 條；
   兩條路由同源（text 吃三層、video 吃前兩層）。實測人工表對模型有實際約束力
   （鎖定譯法 0/7 → 6/7 句，見 [docs/exp-2026-08-16.md](docs/exp-2026-08-16.md) E2）
@@ -94,7 +95,7 @@ Caption track 有四個層級，每層是不同的題目（詳見 [docs/handoff-
   Chromium 實測真實語料 786 句：桌機 0% 超支、手機直向 ≤1%
   （[docs/adr-001-line-budget.md](docs/adr-001-line-budget.md)）
 
-prompt 目前 **v6**；worker 測試 **203 個**。品質防線與所有實證教訓見
+prompt 目前 **v6**；worker 測試 **208 個**。品質防線與所有實證教訓見
 **[docs/lessons-learned.md](docs/lessons-learned.md)**；合併決策材料見
 [docs/kvsplayer-merge-todo.md](docs/kvsplayer-merge-todo.md)。
 
@@ -130,7 +131,7 @@ video 路由的影片另有**字卡層**（🃏 疊畫面上緣、逐句稿有�
 
 | 驗什麼 | 怎麼驗 | 為什麼沒自動驗 |
 |---|---|---|
-| **ext 抓 ucid**（F4）| `chrome://extensions` 重新載入 ext → 送一支片 → 看 `/subs/{id}/source.json` 有沒有 `meta.channelId` | 容器內連不到 YouTube（429／connection reset）—— 與「不做伺服器抓字幕」是同一道牆 |
+| **ext 抓 ucid**（F4）| `chrome://extensions` 重新載入 ext → 送一支片 → 用 `curl -H "x-ingest-key: $KEY"` 看 `/subs/{id}/source.json` 有沒有 `meta.channelId`（它不在公開白名單） | 容器內連不到 YouTube（429／connection reset）—— 與「不做伺服器抓字幕」是同一道牆 |
 | **PWA 手機送片** | 手機開站台 → 加到主畫面 → 用 YouTube 分享或貼連結 → 桌機 popup 看待補佇列 | 需要真手機 |
 | **CSP 升級成強制執行** | 真瀏覽器開 `/watch/{id}` → devtools console 沒有 `report only` 的 CSP 訊息 → 把 `CSP_CANDIDATE` 併進 `CSP_ENFORCED`（`worker/src/index.ts`）| 容器的 proxy 擋掉瀏覽器對 youtube.com 的連線（curl 可以、Chromium 不行），**驗不到就不強制執行**（[§5.4](docs/privacy-hardening.md)）|
 | **R2 沒有開公開存取** | Cloudflare dashboard → R2 → `ytplayer-subs` → 確認沒有 public access／自訂網域 | 那是 dashboard 設定，repo 裡看不到 |
@@ -178,6 +179,7 @@ video 路由的影片另有**字卡層**（🃏 疊畫面上緣、逐句稿有�
 | [docs/model-reeval-sop.md](docs/model-reeval-sop.md) | **模型重評 SOP**：觸發條件、固定五步、判讀規則（候選 mean 要超出基準 min–max）|
 | [docs/exp-2026-08-16.md](docs/exp-2026-08-16.md) | **上線後補測**：G1 頻道表約束力、3.6-flash 重評、lite × 協定總表（含還沒測的誠實清單）|
 | [docs/patch-untranslated.md](docs/patch-untranslated.md) | **未譯句自動偵測 + 補譯**：三種病因解剖、P0 預防、P1 補譯步驟（後來一般化成 `?mode=`）、實測 |
+| [docs/attack-surface.html](docs/attack-surface.html) | **對外攻擊面一頁圖**（HTML，直接用瀏覽器開）：路人的四段動線、完整路由表（誰過得去、看得到什麼）、三項讀取面收斂、以及「沒有 CF token 時哪些驗得到哪些驗不到」|
 | [docs/list-scaling.md](docs/list-scaling.md) | **清單頁的規模上限**：為什麼 5–8 秒、並行讀只治標、100 支之後改用 customMetadata + 一次 list，以及為什麼不做單一 list.json |
 | [docs/adr-001-line-budget.md](docs/adr-001-line-budget.md) | **ADR：字幕排版用「行數預算」不用開關**：為什麼是預算不是開關、砍的順序是權限問題、Chromium 實測 7 種情境、「縮字級不會減少行數」的坑 |
 | [docs/subtitle-readability.md](docs/subtitle-readability.md) | **字幕可讀性計畫**：Netflix 繁中規範（16 字/行、2 行、9 CPS）對照實測、R1 壓縮譯文／R2 折行拆塊／R3 行數預算 roll-up／R4 舊片事後套用／R5 剝夾註。§3.2 有 R4b 上線後的實戰數據與「剩下壓不動的是什麼」 |

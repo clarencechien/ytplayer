@@ -134,3 +134,60 @@ describe('/jobs.json（儀表板的資料）', () => {
     expect(maxInFlight).toBeGreaterThan(1); // 循序的話永遠是 1
   });
 });
+
+// 讀取面的收斂（docs/privacy-hardening.md §5.5）：拿到一條 /watch 連結的人
+// 本來就看得到那支片的字幕 —— 但不該連「花了多少錢、模型吐了什麼」一起看到
+describe('公開資料的邊界', () => {
+  const seed = async (env: ReturnType<typeof envOf>) => {
+    const r2 = env.SUBS as unknown as FakeR2;
+    await r2.put('subs/ksfm6jeTg3Q/status.json', JSON.stringify({
+      videoId: 'ksfm6jeTg3Q', stage: 'failed', step: '3/7', failed: true,
+      failReason: 'translate 步驟連續失敗：LLM 輸出無法解析為 JSON（開頭：<img src=x onerror=…>）',
+      tokensUsed: 84405, llmCalls: 34, model: 'gemini-3.5-flash', promptTokens: 47289,
+    }));
+    await r2.put('subs/ksfm6jeTg3Q/source.json', JSON.stringify({ meta: { description: '一大段影片描述' }, cues: [] }));
+    await r2.put('subs/ksfm6jeTg3Q/bilingual.json', JSON.stringify({ cues: [] }));
+    return r2;
+  };
+  const get = (env: ReturnType<typeof envOf>, path: string, key?: string) =>
+    worker.fetch(new Request(`https://ytplayer.ai-apps.work${path}`, key ? { headers: { 'x-ingest-key': key } } : undefined), env as never);
+
+  it('路人拿到的 status.json 只有進度，沒有花費也沒有模型輸出', async () => {
+    const env = envOf();
+    await seed(env);
+    const body = await (await get(env, '/subs/ksfm6jeTg3Q/status.json')).json();
+    expect(body).toEqual({ videoId: 'ksfm6jeTg3Q', stage: 'failed', step: '3/7', failed: true });
+    const raw = JSON.stringify(body);
+    expect(raw).not.toContain('failReason');
+    expect(raw).not.toContain('onerror'); // 模型輸出一個字都不該外流
+    expect(raw).not.toContain('84405');
+  });
+
+  it('自己人（帶 key）拿得到完整 status —— player 頁才顯示得出失敗原因', async () => {
+    const env = envOf();
+    await seed(env);
+    const body = await (await get(env, '/subs/ksfm6jeTg3Q/status.json', 'test-key')).json();
+    expect(body).toMatchObject({ failReason: expect.stringContaining('translate'), tokensUsed: 84405 });
+  });
+
+  it('source.json 不在公開白名單，但帶 key 拿得到（ab-runner 要抓真實語料）', async () => {
+    const env = envOf();
+    await seed(env);
+    expect((await get(env, '/subs/ksfm6jeTg3Q/source.json')).status).toBe(404);
+    expect((await get(env, '/subs/ksfm6jeTg3Q/source.json', 'test-key')).status).toBe(200);
+  });
+
+  it('字幕本體維持公開 —— 那是「有連結就看得到」的既有取捨，這次不動它', async () => {
+    const env = envOf();
+    await seed(env);
+    expect((await get(env, '/subs/ksfm6jeTg3Q/bilingual.json')).status).toBe(200);
+  });
+
+  it('/health 公開版不含用量與設定旗標，帶 key 才有', async () => {
+    const env = envOf();
+    const open = await (await get(env, '/health')).json();
+    expect(open).toEqual({ service: 'ytplayer', ok: true }); // ext 診斷只看這兩個
+    const mine = await (await get(env, '/health', 'test-key')).json();
+    expect(mine).toMatchObject({ ingestKeyConfigured: true, today: { tokens: 0 } });
+  });
+});

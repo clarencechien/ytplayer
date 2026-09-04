@@ -7,7 +7,8 @@
 //               沒有這把尺，就無法宣稱候選模型／新協定「比較好」
 // 變因用環境變數：CHUNK_SIZE、TRANSLATE_PROTOCOL、
 //   SEED_GLOSSARY=<dir>（把本機 glossary 檔載進 MemR2，測 channel/genre 疊層用）
-// 需求：環境變數 gemini_key、HTTPS_PROXY（node fetch 需手動接 proxy）
+// 需求：環境變數 gemini_key、INGEST_KEY（抓 production 語料用）、
+//       HTTPS_PROXY（node fetch 需手動接 proxy）
 
 import { setGlobalDispatcher, ProxyAgent } from 'undici';
 import { writeFileSync, mkdirSync, readdirSync, readFileSync } from 'node:fs';
@@ -174,7 +175,15 @@ async function main() {
   const apiKey = process.env.gemini_key || process.env.GEMINI_API_KEY;
   if (!apiKey) throw new Error('缺 gemini_key 環境變數');
 
-  const srcRes = await fetch(`https://ytplayer.ai-apps.work/subs/${videoId}/source.json`);
+  // source.json 不在公開白名單裡（它是資料量最大的一份，player 也用不到）——
+  // 抓真實語料要帶 key，見 docs/privacy-hardening.md §5.5
+  const ingestKey = process.env.INGEST_KEY;
+  const srcRes = await fetch(`https://ytplayer.ai-apps.work/subs/${videoId}/source.json`, {
+    headers: ingestKey ? { 'x-ingest-key': ingestKey } : {},
+  });
+  if (srcRes.status === 404 && !ingestKey) {
+    throw new Error('source.json 需要金鑰：設環境變數 INGEST_KEY 再跑一次');
+  }
   if (!srcRes.ok) throw new Error(`source.json 抓不到（${srcRes.status}）`);
   const source = await srcRes.text();
 
