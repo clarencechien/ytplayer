@@ -191,3 +191,47 @@ describe('公開資料的邊界', () => {
     expect(mine).toMatchObject({ ingestKeyConfigured: true, today: { tokens: 0 } });
   });
 });
+
+describe('POST 的 content-type 閘門（CSRF 面）', () => {
+  // 跨站 <form> 只送得出這三種 content-type，其他一律先過 preflight。
+  // 所以「拒收這三種」= 拒收瀏覽器發起的跨站寫入。目前不可利用（授權要靠
+  // x-ingest-key 或 Access JWT），但 Access 範圍一變大就會變成 CSRF 面。
+  const simple = ['application/x-www-form-urlencoded', 'multipart/form-data; boundary=x', 'text/plain'];
+
+  for (const ct of simple) {
+    it(`拒收 ${ct.split(';')[0]} → 415`, async () => {
+      const res = await post(envOf(), payload, { 'content-type': ct });
+      expect(res.status).toBe(415);
+    });
+  }
+
+  it('application/json 照常放行', async () => {
+    expect((await post(envOf(), payload)).status).toBe(200);
+  });
+
+  it('沒有 content-type 也放行 —— README 教的 curl 沒有 body 也沒有標頭', async () => {
+    const res = await worker.fetch(
+      new Request('https://ytplayer.ai-apps.work/translate/ksfm6jeTg3Q?force=1', {
+        method: 'POST',
+        headers: { 'x-ingest-key': 'test-key' },
+      }),
+      envOf() as never
+    );
+    // 這支片不存在，所以會是 404 而不是 200 —— 重點是它沒有被 415 擋在門外
+    expect(res.status).not.toBe(415);
+  });
+
+  it('未授權時 415 一樣先擋下 —— 不因為它未授權就洩漏路由存在與否', async () => {
+    const env = envOf();
+    const res = await worker.fetch(
+      new Request('https://ytplayer.ai-apps.work/ingest', {
+        method: 'POST',
+        headers: { 'content-type': 'text/plain' },
+        body: 'x',
+      }),
+      env as never
+    );
+    expect(res.status).toBe(415);
+    expect((env.JOBS as unknown as FakeQueue).pending).toHaveLength(0);
+  });
+});

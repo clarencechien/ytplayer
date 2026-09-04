@@ -78,6 +78,9 @@ const CHUNKS_PER_BATCH = 4;
 // status.updatedAt 超過此值視為斷鏈（run 死了），看門狗才會重新 enqueue plan
 export const STALE_MS = 10 * 60 * 1000;
 
+/** 同一個輸入版本失敗這麼多次之後,watchdog 就不再重排它。 */
+export const MAX_WATCHDOG_ATTEMPTS = 3;
+
 export interface JobStatus {
   videoId: string;
   stage: JobStep | 'done' | 'failed' | 'paused';
@@ -108,6 +111,10 @@ export interface JobStatus {
   modelOverride?: string; // /translate?model= 指定的本輪模型（A/B 測試）
   failed?: boolean;
   failReason?: string;
+  // 這個錨點版本失敗過幾次。watchdog 用它決定要不要繼續重排 ——
+  // 沒有它的時候,一支「讀不到又沒給 durationMin」的影片會每 5 分鐘被重排一次,
+  // 永遠不停,而且佔掉兩個 watchdog 名額之一。
+  attempts?: number;
   // video 路由專用：分段掃描狀態（kvsplayer 的失敗階梯/覆蓋接續都在這）
   watch?: WatchState;
   title?: string;
@@ -195,12 +202,66 @@ async function writeStatus(env: JobEnv, st: JobStatus): Promise<void> {
   await jsonPut(env, statusKey(st.videoId), st);
 }
 
-async function failStatus(env: JobEnv, videoId: string, reason: string): Promise<void> {
+/**
+ * 本輪輸入的版本錨點。跟 watchdog 用的是同一套判斷:text 看 source.json、
+ * video 看 watch.json,兩者都有時取較新的。
+ */
+async function anchorFor(
+  env: JobEnv,
+  videoId: string,
+): Promise<{ sourceUploaded: string; route: 'text' | 'video' } | undefined> {
+  const srcHead = await env.SUBS.head(`subs/${videoId}/source.json`);
+  const watchHead = await env.SUBS.head(`subs/${videoId}/watch.json`);
+  const isVideo = !!watchHead && (!srcHead || watchHead.uploaded > srcHead.uploaded);
+  const anchor = isVideo ? watchHead : srcHead;
+  if (!anchor) return undefined;
+  return { sourceUploaded: anchor.uploaded.toISOString(), route: isVideo ? 'video' : 'text' };
+}
+
+/**
+ * 標記永久失敗。
+ *
+ * `anchor` 是本輪輸入的版本(watch.json / source.json 的 uploaded ISO)。
+ * **status.json 還不存在時也要寫一筆** —— 先前這裡是 `if (!st) return`,
+ * 於是「還沒寫 status 就失敗」的路徑什麼痕跡都沒留下:probeDuration 跑在
+ * writeStatus 之前,一支讀不到片長的影片會 throw 在那裡,而 watchdog 看到
+ * 「沒有 status」就當成沒跑過,每 5 分鐘重排一次,永遠不停。
+ * 它不燒 LLM token(只花 countTokens 與 oEmbed),所以帳單上看不出來,
+ * 但兩個 watchdog 名額被它佔掉一個,別的影片就修不成。
+ */
+export async function failStatus(
+  env: JobEnv,
+  videoId: string,
+  reason: string,
+  anchor?: { sourceUploaded: string; route: 'text' | 'video' },
+): Promise<void> {
   const st = await jsonGet<JobStatus>(env, statusKey(videoId));
-  if (!st) return;
+  if (!st) {
+    if (!anchor) return; // 連錨點都不知道就沒得寫 —— 呼叫端要帶
+    await writeStatus(env, {
+      videoId,
+      stage: 'failed',
+      startedAt: new Date().toISOString(),
+      updatedAt: '',
+      sourceUploaded: anchor.sourceUploaded,
+      route: anchor.route,
+      repairBatches: 0,
+      translateBatches: null,
+      tokensUsed: 0,
+      llmCalls: 0,
+      retries: 0,
+      asrRepaired: 0,
+      warnings: [],
+      failed: true,
+      failReason: reason,
+      attempts: 1,
+    });
+    return;
+  }
   st.stage = 'failed';
   st.failed = true;
   st.failReason = reason;
+  st.attempts = (st.attempts ?? 0) + 1;
   await writeStatus(env, st);
 }
 
@@ -1155,7 +1216,9 @@ export async function handleJob(msg: MsgLike, env: JobEnv, llmOverride?: LlmFn, 
     const reason = e instanceof Error ? e.message : String(e);
     // 保險絲第 2 層：3 次投遞仍失敗 → 永久標記，不再重試
     if (msg.attempts >= 3) {
-      await failStatus(env, videoId, `${step} 步驟連續失敗：${reason}`);
+      // 錨點在這裡才查:status.json 可能根本還沒被建立(probeDuration 跑在
+      // writeStatus 之前),那時候沒有錨點就寫不出「這一版失敗過」的紀錄。
+      await failStatus(env, videoId, `${step} 步驟連續失敗：${reason}`, await anchorFor(env, videoId));
       msg.ack();
     } else {
       msg.retry({ delaySeconds: 30 });
@@ -1198,6 +1261,10 @@ export async function watchdog(env: JobEnv): Promise<{ scanned: number; enqueued
     const st = await jsonGet<JobStatus>(env, statusKey(videoId));
     if (st && st.sourceUploaded === anchor.uploaded.toISOString()) {
       if (st.failed) continue; // 永久失敗，等人工 force
+      // 同一個錨點失敗太多次就停手。failed 那一條理論上已經涵蓋，這一條是
+      // 給「寫得出 status 但沒被標成 failed」的路徑用的安全網 —— watchdog 名額
+      // 只有兩個，一支修不好的影片不該把它們一直佔著。
+      if ((st.attempts ?? 0) >= MAX_WATCHDOG_ATTEMPTS) continue;
       if (Date.now() - new Date(st.updatedAt).getTime() < STALE_MS) continue; // run 還活著
       if (st.stage === 'paused' && st.updatedAt.slice(0, 10) === new Date().toISOString().slice(0, 10)) continue; // 日預算用完，今天不用再試
     }

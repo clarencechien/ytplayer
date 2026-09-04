@@ -59,7 +59,29 @@ export function readCookie(header: string | null, name: string): string | null {
 
 // 只接受同源路徑，擋掉 open redirect（`//evil.com` 也是絕對網址）
 export function safeNext(next: unknown): string {
-  return typeof next === 'string' && next.startsWith('/') && !next.startsWith('//') ? next : '/';
+  if (typeof next !== 'string' || !next.startsWith('/')) return '/';
+  // `//evil.example` 是 protocol-relative,瀏覽器會當成外站。`/\evil.example`
+  // 也是 —— Chrome 與 Firefox 都把反斜線正規化成斜線,所以只擋 `//` 是不夠的。
+  if (next.startsWith('//') || next.startsWith('/\\')) return '/';
+  return next;
+}
+
+/**
+ * 定時比較。字串的 `===` 一遇到不同的字元就回傳,理論上洩漏「猜對了幾個字元」。
+ *
+ * 實務上這條路很難走通 —— 網路抖動遠大於那點差異,而且 Cloudflare 前面還有
+ * 一層邊緣。但金鑰比對寫成定時是零成本的事,沒有理由不做。
+ */
+export function safeEqual(a: string | undefined, b: string | undefined): boolean {
+  if (typeof a !== 'string' || typeof b !== 'string') return false;
+  // 長度本來就會從這裡洩漏(比對前就知道)。用固定長度的雜湊拉平:
+  // 兩邊都先轉成同長度的位元組再逐位比。
+  const ea = new TextEncoder().encode(a);
+  const eb = new TextEncoder().encode(b);
+  let diff = ea.length ^ eb.length;
+  const n = Math.max(ea.length, eb.length);
+  for (let i = 0; i < n; i++) diff |= (ea[i] ?? 0) ^ (eb[i] ?? 0);
+  return diff === 0;
 }
 
 export async function siteverify(secret: string, token: string, ip: string | null): Promise<boolean> {
