@@ -62,6 +62,38 @@ const BASE: Record<string, string> = {
   'x-robots-tag': 'noindex, nofollow, noarchive',
 };
 
+// HTML 頁面的安全標頭，刻意分成**兩段**：
+//
+// 1. 強制執行的：這幾條**不可能弄壞 YouTube 內嵌播放器** ——
+//    它們管的是「別人能不能框我們」「表單往哪送」「有沒有 plugin/base 標籤」，
+//    跟載入 iframe API 無關，所以在容器裡驗得完、可以直接上。
+// 2. Report-Only 的：default-src/script-src/connect-src… 這幾條才是真正的縱深防禦
+//    （connect-src 與 img-src 限制**出口** —— 就算被塞進一段 script，金鑰也送不出去），
+//    但它們一旦寫錯就是「播放器靜默壞掉」。
+//    ⚠ 這個容器的 proxy 擋掉了瀏覽器對 youtube.com 的連線（curl 可以、Chromium 不行，
+//    ERR_CONNECTION_RESET），所以**在這裡驗不了 youtube.com 那幾條**。
+//    沒驗過的東西不強制執行 —— 先 Report-Only，人在真瀏覽器開 /watch 看 console
+//    沒有 violation 之後，再把它併進上面那段（docs/privacy-hardening.md §5）。
+const CSP_ENFORCED = ["object-src 'none'", "base-uri 'none'", "form-action 'none'", "frame-ancestors 'none'"].join('; ');
+const CSP_CANDIDATE = [
+  "default-src 'self'",
+  // 整頁 JS 是內嵌的，所以還需要 'unsafe-inline'；要拿掉得先改 nonce + 拆掉 admin 的 inline onclick
+  "script-src 'self' 'unsafe-inline' https://www.youtube.com https://s.ytimg.com",
+  "style-src 'self' 'unsafe-inline'",
+  "img-src 'self' data:",
+  "font-src 'self'",
+  "frame-src https://www.youtube.com https://www.youtube-nocookie.com",
+  "connect-src 'self' https://www.youtube.com",
+  CSP_ENFORCED,
+].join('; ');
+
+export const PAGE_SEC: Record<string, string> = {
+  'x-content-type-options': 'nosniff',
+  'referrer-policy': 'no-referrer',
+  'content-security-policy': CSP_ENFORCED,
+  'content-security-policy-report-only': CSP_CANDIDATE,
+};
+
 // --- 爬蟲閘門（不需要 Cloudflare dashboard 的那一層）---
 //
 // 威脅模型：連結外流 → 「我看過哪些影片」變成可搜尋的（migration.md §5）。
@@ -95,6 +127,10 @@ export default {
 
     if (req.method === 'OPTIONS') return new Response(null, { status: 204, headers: BASE });
 
+    // 爬蟲閘門只擋「頁面」：/subs 與 API 不擋 —— 它們要嘛需要 key，要嘛需要先知道 videoId，
+    // 而且 player 頁與本機工具都得抓得到。擋頁面就足以讓爬蟲爬不到影片清單與字幕內容。
+    const isPage = path === '/' || path === '/admin' || path === '/share' || /^\/watch\/[A-Za-z0-9_-]{11}$/.test(path);
+
     const keyConfigured = typeof env.INGEST_KEY === 'string' && env.INGEST_KEY.length > 0;
     // 兩種認證並存（migration.md §5）：人用 Cloudflare Access（SSO 後注入 email header）、程式用 key
     const accessEmail = req.headers.get('cf-access-authenticated-user-email');
@@ -102,16 +138,15 @@ export default {
     const authorized =
       !keyConfigured ||
       req.headers.get('x-ingest-key') === env.INGEST_KEY ||
-      url.searchParams.get('key') === env.INGEST_KEY ||
+      // `?key=` **只認頁面路由**：瀏覽器設不了 header，清單頁需要它 bootstrap（頁面會立刻把它
+      // 收進 localStorage 並從網址清掉）。但 API 不該接受網址帶 key —— 那會把金鑰留在
+      // 瀏覽紀錄、分享出去的連結、Referer 與各層日誌裡，而 API 的呼叫端都設得了 header
+      (isPage && url.searchParams.get('key') === env.INGEST_KEY) ||
       accessOk;
     const warning = keyConfigured ? undefined : '尚未設定 INGEST_KEY secret，任何人都可寫入';
 
     const html = (body: string) =>
-      new Response(body, { headers: { 'content-type': 'text/html; charset=utf-8', ...BASE } });
-
-    // 爬蟲閘門只擋「頁面」：/subs 與 API 不擋 —— 它們要嘛需要 key，要嘛需要先知道 videoId，
-    // 而且 player 頁與本機工具都得抓得到。擋頁面就足以讓爬蟲爬不到影片清單與字幕內容。
-    const isPage = path === '/' || path === '/admin' || path === '/share' || /^\/watch\/[A-Za-z0-9_-]{11}$/.test(path);
+      new Response(body, { headers: { 'content-type': 'text/html; charset=utf-8', ...PAGE_SEC, ...BASE } });
     const verdict = botVerdict(req.headers.get('user-agent') ?? '');
     if (req.method === 'GET' && isPage && verdict === 'block') {
       return new Response('Not available to automated clients.\n', {

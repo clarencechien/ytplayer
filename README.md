@@ -69,6 +69,11 @@ Caption track 有四個層級，每層是不同的題目（詳見 [docs/handoff-
   → **WAF Managed Challenge**（UA 型、zone 層，`ai-apps.work` 全站台涵蓋；真人零摩擦）。
   應用層 Turnstile 程式已備妥但刻意休眠。清單 key-gate、`/admin` Access、API key
   （[docs/privacy-hardening.md](docs/privacy-hardening.md)）
+- **攻擊面**：字幕是外部可控輸入（任何人都能上傳一支帶特製字幕的影片）——
+  字幕全程走 `textContent`；2026-08-21 修掉一條
+  「prompt injection → 模型輸出進 `failReason` → `/watch` 的 innerHTML → 同源偷 INGEST_KEY」
+  的完整鏈路。另加 `?key=` 只認頁面路由、HTML 安全標頭 + CSP
+  （[§5](docs/privacy-hardening.md)）
 - **glossary 疊層**：channel 鎖定表 > genre 通用表 > 當片自動抽，同 term 上層贏、合併上限 80 條；
   兩條路由同源（text 吃三層、video 吃前兩層）。實測人工表對模型有實際約束力
   （鎖定譯法 0/7 → 6/7 句，見 [docs/exp-2026-08-16.md](docs/exp-2026-08-16.md) E2）
@@ -83,14 +88,13 @@ Caption track 有四個層級，每層是不同的題目（詳見 [docs/handoff-
   壓縮前先**零成本剝掉英文夾註**（`原廠（First-party）追蹤器`→`原廠追蹤器`）。
   production 實績：兩支舊片 11→3、16→0，**合計只花 NT$1.55**（整片重翻要 NT$32）
   （[docs/subtitle-readability.md](docs/subtitle-readability.md) §3.1、§6；`CPS_BUDGET=off` 可關）
-
 - **字幕排版行數預算**：字幕區能給幾行隨情境變動（桌機/劇場 4、手機直向 3、手機橫向 2），
   超出時**由下往上砍**：先砍系統自己加的「前一句」、再縮字級，**原文與譯註永遠不砍**。
   中文一行 16 全形字自動折行；「前一句」是三態（自動/開/關），點它跳回重播。
   Chromium 實測真實語料 786 句：桌機 0% 超支、手機直向 ≤1%
   （[docs/adr-001-line-budget.md](docs/adr-001-line-budget.md)）
 
-prompt 目前 **v6**；worker 測試 **189 個**。品質防線與所有實證教訓見
+prompt 目前 **v6**；worker 測試 **193 個**。品質防線與所有實證教訓見
 **[docs/lessons-learned.md](docs/lessons-learned.md)**；合併決策材料見
 [docs/kvsplayer-merge-todo.md](docs/kvsplayer-merge-todo.md)。
 
@@ -127,6 +131,9 @@ video 路由的影片另有**字卡層**（🃏 疊畫面上緣、逐句稿有�
 |---|---|---|
 | **ext 抓 ucid**（F4）| `chrome://extensions` 重新載入 ext → 送一支片 → 看 `/subs/{id}/source.json` 有沒有 `meta.channelId` | 容器內連不到 YouTube（429／connection reset）—— 與「不做伺服器抓字幕」是同一道牆 |
 | **PWA 手機送片** | 手機開站台 → 加到主畫面 → 用 YouTube 分享或貼連結 → 桌機 popup 看待補佇列 | 需要真手機 |
+| **CSP 升級成強制執行** | 真瀏覽器開 `/watch/{id}` → devtools console 沒有 `report only` 的 CSP 訊息 → 把 `CSP_CANDIDATE` 併進 `CSP_ENFORCED`（`worker/src/index.ts`）| 容器的 proxy 擋掉瀏覽器對 youtube.com 的連線（curl 可以、Chromium 不行），**驗不到就不強制執行**（[§5.4](docs/privacy-hardening.md)）|
+| **R2 沒有開公開存取** | Cloudflare dashboard → R2 → `ytplayer-subs` → 確認沒有 public access／自訂網域 | 那是 dashboard 設定，repo 裡看不到 |
+| **手機看排版**（R2a+R3）| 手機直向／橫向各看一支片 —— 橫向雙語時 41% 的句子會佔 3 行 | 我只在 Chromium 模擬 viewport，沒有真機 |
 | **三兄弟有沒有 webhook** | zone 層 challenge 規則對 `ai-apps.work` 全部主機生效 —— 若 kikemu／sukemu／manemu 有接 LINE／Slack／GitHub 等 UA 含 `bot` 的機器推送，會被靜默 403。有的話加一條 Skip 規則（[§3.1](docs/privacy-hardening.md)）| 我看不到那三個專案的流量 |
 | **劇場模式畫質**（畫質 A 案）| player 頁按 `T` → 看畫質標示有沒有升上去 | 需要真螢幕與真播放器 |
 | **G1 跨影片一致性** | 送同一個頻道的第二支片，看 `glossary.json` 的 `layers.channelKey` 是否命中同一張表 | 手上沒有同頻道的第二支已 ingest 影片 |

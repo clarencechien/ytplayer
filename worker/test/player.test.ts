@@ -77,3 +77,35 @@ describe('player 頁面', () => {
     });
   });
 });
+
+// 安全：字幕與 status.json 都是**外部可控**的內容 ——
+// 字幕來自任何人都能上傳的 YouTube 影片，status.failReason 會帶模型輸出的開頭。
+// 這一組測試釘住「可執行內容」的邊界（docs/privacy-hardening.md §5）
+describe('XSS 邊界', () => {
+  const html = watchPage('ksfm6jeTg3Q');
+  const js = inlineScripts(html).join('\n');
+
+  it('字幕本體一律走 textContent，不進 innerHTML', () => {
+    // 逐句稿的骨架是**固定字串**（沒有插值），文字另外用 textContent 填
+    expect(js).toContain('d.querySelector(".zh").textContent = c.zh');
+    expect(js).toContain('d.querySelector(".en").textContent = c.en');
+    expect(js).toContain('subZh.textContent = c.zh');
+    expect(js).toContain('d.textContent = c.zh'); // 字卡層
+    expect(js).not.toMatch(/innerHTML\s*=[^;]*c\.(zh|en|note)/);
+  });
+
+  it('status.json 進 innerHTML 前一定先 escape（模型輸出會走這條路）', () => {
+    expect(js).toContain('esc(st.failReason');
+    expect(js).toContain('esc(st.stage)');
+    expect(js).not.toMatch(/\+\s*\(?st\.failReason\s*\|\|/); // 未 escape 的舊寫法
+  });
+
+  // 路由的 regex 已經把 videoId 限死成 11 碼，但 watchPage 是 export 的函式 ——
+  // 它不該依賴呼叫端的驗證。JSON.stringify **不會** escape `<`，
+  // 所以 videoId 裡的 `</script>` 會直接關掉 script 標籤（縱深防禦，不是現存漏洞）
+  it('videoId 插進 <script> 前會把 < 轉義，不靠呼叫端把關', () => {
+    const out = watchPage('</script><img src=x onerror=alert(1)>');
+    expect(out).not.toContain('</script><img');
+    expect(out).toContain('\\u003c/script>');
+  });
+});
