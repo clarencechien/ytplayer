@@ -30,6 +30,7 @@ import {
   safeNext,
   PASS_COOKIE,
 } from './turnstile';
+import { accessEmail } from './access';
 
 export interface Env {
   SUBS: R2Bucket;
@@ -46,6 +47,11 @@ export interface Env {
   COST_OUT_NTD_PER_M?: string; // 輸出費率 NT$/M tokens（預設 280 ≈ $9.00×31；thinking 計此價）
   COST_NTD_PER_M?: string; // 舊：單一混合費率，設了就蓋過雙費率
   ALLOWED_EMAIL?: string; // Cloudflare Access 使用者白名單（/admin 的人用認證；程式仍用 key）
+  // Access 的 JWT 驗簽材料。兩個都設齊才會採信 Access；缺任一個 = 只認 key。
+  // ACCESS_TEAM 是團隊名（<這一段>.cloudflareaccess.com），
+  // ACCESS_AUD 是該 Application 的 Audience (AUD) Tag（64 位十六進位）。
+  ACCESS_TEAM?: string;
+  ACCESS_AUD?: string;
   // Turnstile（隱私第三層）：兩個都設才生效。**site key 也要用 Secret 存** ——
   // dashboard 的明文變數會被 git 部署蓋掉（硬規則 #1 的 var-stomping）
   TURNSTILE_SITE_KEY?: string;
@@ -132,18 +138,32 @@ export default {
     const isPage = path === '/' || path === '/admin' || path === '/share' || /^\/watch\/[A-Za-z0-9_-]{11}$/.test(path);
 
     const keyConfigured = typeof env.INGEST_KEY === 'string' && env.INGEST_KEY.length > 0;
-    // 兩種認證並存（migration.md §5）：人用 Cloudflare Access（SSO 後注入 email header）、程式用 key
-    const accessEmail = req.headers.get('cf-access-authenticated-user-email');
-    const accessOk = !!env.ALLOWED_EMAIL && accessEmail === env.ALLOWED_EMAIL;
-    const authorized =
-      !keyConfigured ||
-      req.headers.get('x-ingest-key') === env.INGEST_KEY ||
-      // `?key=` **只認頁面路由**：瀏覽器設不了 header，清單頁需要它 bootstrap（頁面會立刻把它
-      // 收進 localStorage 並從網址清掉）。但 API 不該接受網址帶 key —— 那會把金鑰留在
-      // 瀏覽紀錄、分享出去的連結、Referer 與各層日誌裡，而 API 的呼叫端都設得了 header
-      (isPage && url.searchParams.get('key') === env.INGEST_KEY) ||
-      accessOk;
-    const warning = keyConfigured ? undefined : '尚未設定 INGEST_KEY secret，任何人都可寫入';
+
+    // 兩種認證並存（migration.md §5）：人用 Cloudflare Access、程式用 key。
+    //
+    // ⚠ 2026-09-04 修正：這裡原本直接比對 `cf-access-authenticated-user-email` header，
+    // 而且套用在**所有路徑**上。但 Access application 只蓋 /admin/*，而 Access 沒有蓋到的
+    // 路徑，Cloudflare 不會幫你把使用者自己送的同名 header 拿掉 —— 等於任何人送一個
+    // header 就拿到 INGEST_KEY 等級的權限（寫入、觸發 LLM、讀瀏覽紀錄），而 owner email
+    // 是公開的 git author。現在改成兩道：只在 /admin 路徑採信，而且驗 JWT 簽章。
+    const isAdminPath = path === '/admin' || path.startsWith('/admin/');
+    const accessUser = isAdminPath ? await accessEmail(req, env) : null;
+    const accessOk = !!env.ALLOWED_EMAIL && accessUser === env.ALLOWED_EMAIL;
+
+    // key 認證。`?key=` **只認頁面路由**：瀏覽器設不了 header，清單頁需要它 bootstrap
+    //（頁面會立刻把它收進 localStorage 並從網址清掉）。但 API 不該接受網址帶 key ——
+    // 那會把金鑰留在瀏覽紀錄、分享出去的連結、Referer 與各層日誌裡。
+    //
+    // ⚠ 同一輪修正：原本是 `!keyConfigured || ...`，也就是 INGEST_KEY 沒設時**全部放行**，
+    // 所有付費端點與瀏覽紀錄對外全開，而 /health 又不再對外顯示這個狀態 —— 掉了 secret
+    // 是靜默的。改成 fail-closed：沒設 key 就沒有 key 認證這條路。
+    const keyOk =
+      keyConfigured &&
+      (req.headers.get('x-ingest-key') === env.INGEST_KEY ||
+        (isPage && url.searchParams.get('key') === env.INGEST_KEY));
+
+    const authorized = keyOk || accessOk;
+    const warning = keyConfigured ? undefined : '尚未設定 INGEST_KEY secret，需要授權的端點一律拒絕';
 
     const html = (body: string) =>
       new Response(body, { headers: { 'content-type': 'text/html; charset=utf-8', ...PAGE_SEC, ...BASE } });
