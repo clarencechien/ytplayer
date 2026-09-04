@@ -39,8 +39,8 @@
 | GET | `/` | 公開 | 影片清單頁（player 入口） |
 | GET | `/watch/{videoId}` | 公開 | Player 頁（iframe + 雙語字幕層 + 逐句稿） |
 | GET | `/videos.json` | **key** | 清單資料（等於觀看紀錄，不對外） |
-| GET | `/subs/{videoId}/{file}` | 公開 | `source/sentences/glossary/bilingual/info/status.json`、`bilingual.srt` |
-| GET | `/health` | 公開 | 狀態（`ingestKeyConfigured` 要是 `true`） |
+| GET | `/subs/{videoId}/{file}` | 公開 | `sentences/glossary/bilingual/info/status.json`、`bilingual.srt`。**`status.json` 公開版只有 `stage/step/failed`**（花費與 `failReason` 要 key）；**`source.json` 不在公開白名單**，要 key |
+| GET | `/health` | 公開 | 公開版只有 `service`/`ok`。**帶 key 才有** `ingestKeyConfigured`（要是 `true`）與今日用量：`curl -H "x-ingest-key: $KEY" …/health` |
 | GET | `/robots.txt` | 公開 | 允許抓取（全站另有 `X-Robots-Tag: noindex` — 擋爬會讓 noindex 看不見） |
 | GET | `/admin` | Access | 儀表板：任務狀態、今日花費、看片路線送片、每列的修正按鈕 |
 | GET | `/jobs.json` | **key** | 儀表板資料（順便回填舊片缺的 `untranslated`／`cpsOver`／`doneAt`）|

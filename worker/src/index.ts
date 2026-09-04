@@ -185,13 +185,20 @@ export default {
       // 今日花費隨時可見（成本事故的教訓：看不見的花費才是危險的花費）
       const budget = await readDailyBudget(env);
       const dailyCap = Number(env.DAILY_TOKEN_CAP) > 0 ? Number(env.DAILY_TOKEN_CAP) : 2_000_000;
+      // 公開的只有「這是不是 ytplayer、活著沒」—— ext 的分層診斷只需要這兩個。
+      // 用量與設定旗標要 key：今日翻了幾支、花了多少 token 是營運資訊，
+      // 而 ingestKeyConfigured=false 更是直接告訴人「這站現在誰都能寫」
       return json({
         service: 'ytplayer',
         ok: true,
-        ingestKeyConfigured: keyConfigured,
-        // 兩個都設才會生效 —— 部署後先看這行確認 Secret 有進來（明文變數會被部署蓋掉）
-        turnstileConfigured: turnstileConfigured(env),
-        today: { tokens: budget.tokens, llmCalls: budget.calls, dailyCapTokens: dailyCap },
+        ...(authorized
+          ? {
+              ingestKeyConfigured: keyConfigured,
+              // 兩個都設才會生效 —— 部署後先看這行確認 Secret 有進來（明文變數會被部署蓋掉）
+              turnstileConfigured: turnstileConfigured(env),
+              today: { tokens: budget.tokens, llmCalls: budget.calls, dailyCapTokens: dailyCap },
+            }
+          : {}),
       });
     }
     // 陷阱提醒：robots.txt 不能 Disallow — 擋了爬取，爬蟲就看不到 noindex 標頭，
@@ -548,8 +555,10 @@ export default {
       );
     }
 
+    // ⚠ **source.json 刻意不在這裡**：它是原始字幕軌加影片描述前 2000 字，
+    // player 頁一個欄位都沒用到，卻是公開資料量最大的一份。要拿請帶 key
+    //（本機 ab-runner 就是這樣抓的）。docs/privacy-hardening.md §5.5
     const FILES = [
-      'source.json',
       'sentences.json',
       'glossary.json',
       'bilingual.json',
@@ -560,9 +569,17 @@ export default {
       'last-run.json', // 舊資料仍可讀（新系統不再寫）
     ];
     const m = path.match(/^\/subs\/([A-Za-z0-9_-]{11})\/([a-z.-]+)$/);
-    if (req.method === 'GET' && m && FILES.includes(m[2])) {
+    // 帶 key 的話 source.json 也給（ab-runner 要抓真實語料）
+    if (req.method === 'GET' && m && (FILES.includes(m[2]) || (authorized && m[2] === 'source.json'))) {
       const obj = await env.SUBS.get(`subs/${m[1]}/${m[2]}`);
       if (!obj) return json({ ok: false, error: 'not found' }, 404);
+      // status.json 要公開（player 頁靠它顯示「翻譯中／失敗」），但它同時帶著
+      // 模型名稱、token 用量、以及 **failReason —— 那會帶模型輸出的開頭**。
+      // 沒有 key 的人只給進度三欄；自己人（localStorage 有 key）拿得到完整版
+      if (m[2] === 'status.json' && !authorized) {
+        const st = JSON.parse(await obj.text()) as Record<string, unknown>;
+        return json({ videoId: st.videoId, stage: st.stage, step: st.step, failed: st.failed ?? false });
+      }
       const contentType = m[2].endsWith('.srt') ? 'text/plain; charset=utf-8' : 'application/json; charset=utf-8';
       return new Response(obj.body, { headers: { 'content-type': contentType, ...BASE } });
     }

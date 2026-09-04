@@ -557,7 +557,13 @@ function load() {
   fetch("/subs/" + VID + "/bilingual.json").then(function (r) {
     if (!r.ok) {
       // 還沒翻好：顯示 job 進度（status.json 每步更新），此頁自動重試
-      fetch("/subs/" + VID + "/status.json").then(function (s) { return s.ok ? s.json() : null; })
+      // 自己人（localStorage 有金鑰）拿得到完整 status（含失敗原因）；
+      // 路人只拿得到 stage/step/failed —— failReason 會帶模型輸出，不對外
+      // 同源請求，加 header 不會觸發預檢
+      var K = null;
+      try { K = localStorage.getItem("ytplayer-key"); } catch (e) { /* 隱私模式 */ }
+      fetch("/subs/" + VID + "/status.json", K ? { headers: { "x-ingest-key": K } } : undefined)
+        .then(function (s) { return s.ok ? s.json() : null; })
         .catch(function () { return null; })
         .then(function (st) {
           var msg = '這支影片的翻譯還沒好。此頁會自動重試…';
@@ -915,7 +921,7 @@ function refresh() {
           ? Date.parse(j.doneAt || j.updatedAt) - Date.parse(j.startedAt)
           : Date.now() - Date.parse(j.startedAt);
         return "<tr><td><a class='title' href='/watch/" + j.videoId + "' target='_blank' title='" + esc(j.title) + "'>" + esc(j.title) + "</a><br>" +
-          "<span class='hint'>" + j.videoId + "・<a href='/subs/" + j.videoId + "/status.json' target='_blank'>status</a>" +
+          "<span class='hint'>" + j.videoId + "・<a href='/subs/" + j.videoId + "/status.json' target='_blank' title='瀏覽器直接開只會拿到進度三欄（stage/step/failed）—— 花費與失敗原因要帶金鑰，這一列本來就有'>status</a>" +
           // 零成本的修正鈕永遠顯示（按了最多是沒事發生）；
           // 花錢的補譯鈕只在真的有目標時出現，而且**按鈕上直接帶數字** ——
           // 舊片的計數由 /jobs.json 回填，所以事後也修得掉（docs/subtitle-readability.md R4b）
