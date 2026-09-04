@@ -147,6 +147,27 @@ Claude public artifacts 的教訓是：**「沒有連結就沒人知道」不成
 > `ACCESS_TEAM`(團隊名,`<這一段>.cloudflareaccess.com`)與 `ACCESS_AUD`(該 Application 的
 > Audience Tag,64 位十六進位;Zero Trust → Access → Applications → Configure → Additional settings)。
 > **兩把缺一 → 一律不採信 Access header**,只認 key(fail-closed)。
+>
+> **⚠ AUD 是每個 application 一組,不是整個帳號一組。** 同一個團隊底下開兩個應用會有兩個 AUD,
+> 把別的專案(例如 mahou)的 AUD 複製過來,JWT 會被驗簽擋掉、`accessOk` 一直是 false,
+> 而且是**靜默的** —— 它會退回 key 認證,不會報錯。取值要從 **ytplayer 自己那個 application** 取。
+>
+> **⚠ Access 只在它蓋到的路徑上注入 JWT。** application 蓋的是 `/admin`,而 admin 頁面的資料是打
+> `/videos.json`、`/inbox.json` 這些**沒被蓋到**的路徑 —— 那些請求上不會有 JWT,所以:
+>
+> | 對象 | 修正後的行為 |
+> |---|---|
+> | `/admin` 這一頁本身 | Access 照常放行 |
+> | 這一頁發出的資料請求 | 需要該裝置的 localStorage 裡有 key |
+>
+> 在該裝置用 `/?key=<INGEST_KEY>` 開一次清單頁就永久解決(前端會存進 localStorage 並把 key 從
+> 網址清掉),`worker/src/player.ts` 的未授權訊息本來就在講這件事。
+>
+> 這是這次修正刻意付的代價:舊行為之所以「不用 key 也能用」,正是因為它信任了那個可以偽造的 header。
+> 要兩全的話,可以讓 `/admin` 在驗過 Access 之後簽一張短效 cookie 給同源 XHR 用
+>(本 repo 的 Turnstile 已有 `issuePass` / `passValid` 的現成模式)—— 那是新功能,不在安全修正範圍。
+>
+> **狀態:2026-09-04 已建立 Access application 並設好兩把 secret。**
 
 5. 合併後的 `/admin`（video 路由貼連結頁）沿用 kvsplayer 的 **Cloudflare Access（Google SSO）**，
    path 範圍鎖 `/admin/*`；API 寫入維持 key。兩種認證並存，規則：**人用 Access、程式用 key**
