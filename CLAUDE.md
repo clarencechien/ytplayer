@@ -32,8 +32,10 @@
    （計數跨重排累計，別改回歸零）→ 全域日預算。花費可視：`/health`、`/admin` 儀表板
 6. **字幕與 status.json 都是外部可控輸入** —— 字幕來自任何人都能上傳的影片，
    而 `failReason` 會帶模型輸出的開頭。`textContent` 是預設、`innerHTML` 是例外，
-   插值前一定 `esc()`（2026-08-21 修掉一條 prompt injection → 同源 XSS → 偷 INGEST_KEY
-   的完整鏈路，docs/privacy-hardening.md §5）
+   插值前一定 `esc()`，而且 **`esc()` 要連引號一起跳脫**（屬性位置用得到 ——
+   影片標題也是外部輸入，`title='…'` 曾可被單引號關掉）。
+   兩條同類鏈路都修在 §5：字幕→`failReason`→文字位置、標題→`title`→屬性位置。
+   **修完一條要問「同樣的外部輸入還流去哪裡」**（docs/privacy-hardening.md §5.1、§5.6）
 7. 模型輸出視為敵意輸入 — 品質地板靠 deterministic 檢查（`sanityCheckItem`、禁用詞三層、
    `assertIdSanity`、**回聲對位 `t`**），不靠 LLM 自我審查。
    取捨原則：**寧可看得見地失敗（標 untranslated），也不要安靜地錯（譯文對到隔壁句）**
@@ -49,7 +51,7 @@
 
 ## 常用操作
 
-- 測試：`cd worker && npx vitest run`（208 個，push 前必綠）
+- 測試：`cd worker && npx vitest run`（214 個，push 前必綠）
 - 手動翻譯：`POST /translate/{id}?force=1`（key：`x-ingest-key`）；A/B 擂台：`&model=…`
 - 補譯：`POST /patch/{id}?mode=untranslated|cps|all`（只重譯有問題的句子，不重跑整片）
   —— `untranslated`＝未譯／原文照抄（預設，assemble 自動接的那條）；`cps`＝顯示時間讀不完的句子壓短
