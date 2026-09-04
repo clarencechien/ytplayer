@@ -102,3 +102,35 @@ describe('/ingest（ext 送片的那條路）', () => {
     expect(await res.json()).toMatchObject({ service: 'ytplayer' });
   });
 });
+
+// /admin 的資料來源。它比清單頁更貴：舊片要回填就得讀 bilingual.json（好幾 MB），
+// 循序跑就是 N 趟來回 —— 與 /videos.json 同一個病（2026-09-04 實測 5–8 秒）
+describe('/jobs.json（儀表板的資料）', () => {
+  it('多支影片並行讀取，不是一支一支等', async () => {
+    let inFlight = 0;
+    let maxInFlight = 0;
+    const r2 = new FakeR2();
+    for (let i = 0; i < 25; i++) {
+      const id = `job${String(i).padStart(8, '0')}`.slice(0, 11);
+      await r2.put(`subs/${id}/status.json`, JSON.stringify({ videoId: id, stage: 'done', title: 'T', updatedAt: '2026-08-01', doneAt: '2026-08-01', untranslated: 0, cpsOver: 0 }));
+    }
+    const origGet = r2.get.bind(r2);
+    r2.get = async (key: string) => {
+      inFlight++;
+      maxInFlight = Math.max(maxInFlight, inFlight);
+      await new Promise((r) => setTimeout(r, 1));
+      try {
+        return await origGet(key);
+      } finally {
+        inFlight--;
+      }
+    };
+    const res = await worker.fetch(
+      new Request('https://ytplayer.ai-apps.work/jobs.json', { headers: { 'x-ingest-key': 'test-key' } }),
+      { SUBS: r2 as unknown as R2Bucket, JOBS: new FakeQueue() as unknown as Queue, INGEST_KEY: 'test-key' } as never
+    );
+    expect(res.status).toBe(200);
+    expect((await res.json()).jobs).toHaveLength(25);
+    expect(maxInFlight).toBeGreaterThan(1); // 循序的話永遠是 1
+  });
+});

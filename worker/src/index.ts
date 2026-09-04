@@ -16,7 +16,7 @@
 
 import { validateIngest } from './validate';
 import { retimeCues, type RetimeCue } from './retime';
-import { listVideos, routeSource, toSrt, countCpsOver } from './pipeline';
+import { listVideos, routeSource, toSrt, countCpsOver, LIST_CONCURRENCY } from './pipeline';
 import { handleJob, watchdog, readDailyBudget, type JobMsg, type MsgLike, type PatchMode, type WatchRequest } from './jobs';
 import { watchPage, indexPage, adminPage, sharePage } from './player';
 import {
@@ -270,12 +270,14 @@ export default {
         cursor = res.truncated ? res.cursor : undefined;
       } while (cursor);
 
-      const jobs: Array<Record<string, unknown>> = [];
-      for (const p of prefixes) {
-        const videoId = p.slice('subs/'.length).replace(/\/$/, '');
-        if (!/^[A-Za-z0-9_-]{11}$/.test(videoId)) continue;
+      // 與 listVideos 同一個問題：一支影片至少一次 R2 GET，循序跑就是 N 趟來回。
+      // 儀表板還更貴 —— 舊片要回填就得讀 bilingual.json（好幾 MB）。分批並行
+      const ids = prefixes
+        .map((p) => p.slice('subs/'.length).replace(/\/$/, ''))
+        .filter((id) => /^[A-Za-z0-9_-]{11}$/.test(id));
+      const one = async (videoId: string): Promise<Record<string, unknown> | null> => {
         const stObj = await env.SUBS.get(`subs/${videoId}/status.json`);
-        if (!stObj) continue;
+        if (!stObj) return null;
         const st = JSON.parse(await stObj.text()) as Record<string, unknown> & { title?: string; tokensUsed?: number };
         let title = st.title;
         if (!title) {
@@ -301,7 +303,7 @@ export default {
             });
           }
         }
-        jobs.push({
+        return {
           videoId,
           title: title ?? videoId,
           route: st.route,
@@ -323,7 +325,12 @@ export default {
           // 讀不完的句數：舊片也算得出來，所以事後也修得掉（docs/subtitle-readability.md R4b）
           cpsOver: (st.cpsOver as number) ?? 0,
           patchRounds: (st.patchRounds as number) ?? 0,
-        });
+        };
+      };
+      const jobs: Array<Record<string, unknown>> = [];
+      for (let i = 0; i < ids.length; i += LIST_CONCURRENCY) {
+        const batch = await Promise.all(ids.slice(i, i + LIST_CONCURRENCY).map(one));
+        for (const j of batch) if (j) jobs.push(j);
       }
       // 進行中在最上、失敗次之、完成的按時間新到舊
       const rank = (j: Record<string, unknown>) => (j.failed ? 1 : j.stage === 'done' ? 2 : 0);
