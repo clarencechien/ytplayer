@@ -701,6 +701,8 @@ export interface PipelineEnv {
   GEMINI_MODEL?: string;
 }
 
+export const LIST_CONCURRENCY = 10;
+
 // 清單頁資料：翻好的（有 info.json，缺的話從 bilingual.json 回填）+ 已 ingest 未翻的
 export async function listVideos(
   env: PipelineEnv
@@ -713,18 +715,22 @@ export async function listVideos(
     cursor = res.truncated ? res.cursor : undefined;
   } while (cursor);
 
-  const out: Array<Record<string, unknown>> = [];
-  for (const p of prefixes) {
-    const videoId = p.slice('subs/'.length).replace(/\/$/, '');
-    if (!/^[A-Za-z0-9_-]{11}$/.test(videoId)) continue;
+  const ids = prefixes
+    .map((p) => p.slice('subs/'.length).replace(/\/$/, ''))
+    .filter((id) => /^[A-Za-z0-9_-]{11}$/.test(id));
+
+  // **並行讀**：一支影片至少一次 R2 GET，循序跑 31 支就是 31 趟來回 ——
+  // 實測 production 的 /videos.json 要 5–8 秒，使用者看到的就是「開站一直 loading」。
+  // R2 讀取純 I/O，分批並行即可；一批 10 支是為了不要一次開太多連線
+  const one = async (videoId: string): Promise<Record<string, unknown> | null> => {
     const info = await env.SUBS.get(`subs/${videoId}/info.json`);
     if (info) {
-      out.push({ ...(JSON.parse(await info.text()) as Record<string, unknown>), translated: true });
-      continue;
+      return { ...(JSON.parse(await info.text()) as Record<string, unknown>), translated: true };
     }
     const bil = await env.SUBS.get(`subs/${videoId}/bilingual.json`);
     if (bil) {
-      // 舊資料回填 info.json
+      // 舊資料回填 info.json（回填過就不會再走這條 —— 這是清單頁最貴的一條路，
+      // bilingual.json 動輒好幾 MB）
       const doc = JSON.parse(await bil.text()) as {
         meta?: { title?: string; channel?: string; durationSec?: number };
         generatedAt?: string;
@@ -741,8 +747,7 @@ export async function listVideos(
       await env.SUBS.put(`subs/${videoId}/info.json`, JSON.stringify(entry), {
         httpMetadata: { contentType: 'application/json' },
       });
-      out.push({ ...entry, translated: true });
-      continue;
+      return { ...entry, translated: true };
     }
     const srcObj = await env.SUBS.get(`subs/${videoId}/source.json`);
     if (srcObj) {
@@ -756,15 +761,22 @@ export async function listVideos(
       const st = stObj
         ? (JSON.parse(await stObj.text()) as { stage?: string; step?: string; failed?: boolean; failReason?: string })
         : undefined;
-      out.push({
+      return {
         videoId,
         title: doc.meta?.title ?? videoId,
         translated: false,
         queued: route !== 'reject',
         ...(reason ? { reason } : {}),
         ...(st ? { stage: st.stage, step: st.step, ...(st.failed ? { failed: true, failReason: st.failReason } : {}) } : {}),
-      });
+      };
     }
+    return null;
+  };
+
+  const out: Array<Record<string, unknown>> = [];
+  for (let i = 0; i < ids.length; i += LIST_CONCURRENCY) {
+    const batch = await Promise.all(ids.slice(i, i + LIST_CONCURRENCY).map(one));
+    for (const e of batch) if (e) out.push(e);
   }
   out.sort((a, b) => String(b.generatedAt ?? '').localeCompare(String(a.generatedAt ?? '')));
   return out;
