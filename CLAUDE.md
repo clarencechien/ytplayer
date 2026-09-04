@@ -14,9 +14,13 @@
 3. **紅線**：YouTube 自動翻譯軌（`tlang`）永不作為輸入；中文軌拒收（路由表 `routeSource`）；
    robots.txt **永遠 Allow**（Disallow = 爬蟲讀不到 noindex，反而被收錄）；
    爬蟲閘門**放行正牌搜尋引擎**（同一個道理，見 docs/privacy-hardening.md）
-   ⚠ `ai-apps.work` 有一條 **zone 層 WAF 規則**（UA 含 bot/crawl → Managed Challenge），
-   對三兄弟（kikemu/sukemu/manemu）與本專案全部生效 —— **要加 webhook 端點前先看它**，
-   對方 UA 含 `bot` 會被靜默 403（privacy-hardening.md §3.1）
+   ⚠ `ai-apps.work` 有一條 **zone 層 WAF 規則**（Managed Challenge），對三兄弟
+   （kikemu/sukemu/manemu）與本專案全部生效。**它會咬到自己的 ext 與 API** ——
+   2026-09-04 ext 送片 `Failed to fetch` 就是它（challenge 頁沒有 CORS 標頭 →
+   跨來源 fetch 讀不到）。zone 規則要跟 Worker 的分界一致：**challenge 只該守頁面**
+   （`/`、`/watch/*`、`/admin`、`/share`），API 與 `OPTIONS` 預檢要 Skip
+   （修法與完整診斷：privacy-hardening.md §6）
+   **看到 403 帶 `cf-mitigated` 就不是 Worker 回的，別去程式裡找**
 4. **LLM 工作只能在 queue consumer 跑**（fetch handler 含 waitUntil 會被砍 — 實測）；
    cron 是零成本看門狗，永不碰 LLM
 5. **花費保險絲四層**不可拆：Google prepay → 每步 3 次重試永久失敗 → 每片 token 上限
@@ -40,7 +44,7 @@
 
 ## 常用操作
 
-- 測試：`cd worker && npx vitest run`（193 個，push 前必綠）
+- 測試：`cd worker && npx vitest run`（198 個，push 前必綠）
 - 手動翻譯：`POST /translate/{id}?force=1`（key：`x-ingest-key`）；A/B 擂台：`&model=…`
 - 補譯：`POST /patch/{id}?mode=untranslated|cps|all`（只重譯有問題的句子，不重跑整片）
   —— `untranslated`＝未譯／原文照抄（預設，assemble 自動接的那條）；`cps`＝顯示時間讀不完的句子壓短
