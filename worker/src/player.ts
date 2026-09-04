@@ -545,8 +545,14 @@ function createYT() {
   });
 }
 
-// 任何要進 innerHTML 的外來字串都得先過這裡（字幕本體走 textContent，不經過這條路）
-function esc(v) { var d = document.createElement("span"); d.textContent = String(v == null ? "" : v); return d.innerHTML; }
+// 任何要進 innerHTML 的外來字串都得先過這裡（字幕本體走 textContent，不經過這條路）。**引號一定要跳脫** —— 屬性位置（admin 的 title='…'）用得到，
+// 而 textContent→innerHTML 的序列化器不會處理引號（文字節點裡的引號沒有意義，
+// 到了屬性裡就有）。影片標題來自 YouTube，是外部可控輸入
+function esc(v) {
+  return String(v == null ? "" : v)
+    .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;").replace(/'/g, "&#39;");
+}
 function fmtTime(t) {
   t = Math.floor(t);
   var m = Math.floor(t / 60), s = t % 60;
@@ -741,7 +747,14 @@ function askKey(msg) {
   };
 }
 
-function esc(v) { var d = document.createElement("span"); d.textContent = String(v == null ? "" : v); return d.innerHTML; }
+// HTML 逃逸。**引號一定要跳脫** —— 屬性位置（admin 的 title='…'）用得到，
+// 而 textContent→innerHTML 的序列化器不會處理引號（文字節點裡的引號沒有意義，
+// 到了屬性裡就有）。影片標題來自 YouTube，是外部可控輸入
+function esc(v) {
+  return String(v == null ? "" : v)
+    .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;").replace(/'/g, "&#39;");
+}
 
 // PWA：註冊極簡 service worker 取得可安裝資格（不快取，見 docs/pwa-plan.md §4.2）
 if ("serviceWorker" in navigator) navigator.serviceWorker.register("/sw.js").catch(function () {});
@@ -884,7 +897,14 @@ function fmtWhen(iso) {
   var d = new Date(iso);
   return esc(d.toLocaleDateString()) + "<br><span class='hint'>" + esc(d.toLocaleTimeString()) + "</span>";
 }
-function esc(s) { var d = document.createElement("span"); d.textContent = String(s == null ? "" : s); return d.innerHTML; }
+// HTML 逃逸。**引號一定要跳脫** —— 屬性位置（admin 的 title='…'）用得到，
+// 而 textContent→innerHTML 的序列化器不會處理引號（文字節點裡的引號沒有意義，
+// 到了屬性裡就有）。影片標題來自 YouTube，是外部可控輸入
+function esc(v) {
+  return String(v == null ? "" : v)
+    .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;").replace(/'/g, "&#39;");
+}
 function stCls(j) { return j.failed ? "st-fail" : j.stage === "done" ? "st-done" : j.stage === "paused" ? "st-pause" : "st-run"; }
 function stTxt(j) {
   if (j.failed) return "❌ failed：" + (j.failReason || "");

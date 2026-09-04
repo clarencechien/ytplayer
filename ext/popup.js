@@ -6,7 +6,8 @@ const DEFAULT_WORKER_URL = 'https://ytplayer.ai-apps.work';
 
 const app = document.getElementById('app');
 const result = document.getElementById('result');
-const esc = (s) => String(s ?? '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+// 單引號也跳脫：這裡的屬性目前都是雙引號，但別讓下一個人踩到（Worker 端就踩過）
+const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 
 async function getConfig() {
   const { config } = await chrome.storage.local.get('config');

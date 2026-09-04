@@ -109,3 +109,42 @@ describe('XSS 邊界', () => {
     expect(out).toContain('\\u003c/script>');
   });
 });
+
+// 2026-09-04 security scan 的副產品：scan 本身沒有 finding，但它的敘述提到
+// admin 那列把標題放進 title='…'。追下去發現 esc() 不跳脫引號 ——
+// 而**影片標題來自 YouTube**（ext 讀 videoDetails.title），跟字幕一樣是外部可控輸入。
+// 完整鏈路：攻擊者的影片標題帶單引號 → 你 ingest 它 → 開 /admin → 屬性被關掉 →
+// 同源的 localStorage 裡就是 INGEST_KEY。與 §5 修掉的那條是同一類，只是換個欄位
+describe('esc() 的引號安全', () => {
+  const escOf = (html: string): ((v: string) => string) | null => {
+    const js = inlineScripts(html).join('\n');
+    const i = js.indexOf('function esc(');
+    if (i < 0) return null; // share 頁沒有 esc()：它的插值只有 regex 驗過的 11 碼 videoId
+    const body = js.slice(i, js.indexOf('\n}', i) + 2);
+    return new Function(`${body}; return esc;`)() as (v: string) => string;
+  };
+
+  it.each(PAGES)('%s 頁的 esc()（若有）會跳脫單引號與雙引號', (_name, html) => {
+    const esc = escOf(html);
+    if (!esc) return;
+    expect(esc(`a'b`)).toBe('a&#39;b');
+    expect(esc('a"b')).toBe('a&quot;b');
+    expect(esc('<img>&')).toBe('&lt;img&gt;&amp;');
+    expect(esc('&lt;')).toBe('&amp;lt;'); // & 要先跳脫，不然會二次解讀
+  });
+
+  it('帶單引號的影片標題關不掉 admin 的 title 屬性', () => {
+    const esc = escOf(adminPage())!;
+    const evil = `片名' onmouseover='steal(localStorage)`;
+    const attr = `title='${esc(evil)}'`;
+    // 唯一要成立的性質：屬性只由頭尾兩個引號界定。裡面多一個就是逃出去了。
+    // （payload 的文字本身還在，但那是**無害的文字內容** —— 那正是正確行為）
+    expect(attr.split("'")).toHaveLength(3);
+  });
+
+  it('share 頁沒有 esc()，但它插進 href 的 id 一定是 regex 驗過的 11 碼', () => {
+    const js = inlineScripts(sharePage()).join('\n');
+    expect(js).toContain('([A-Za-z0-9_-]{11})');
+    expect(js).toContain('return m ? m[1] : null');
+  });
+});

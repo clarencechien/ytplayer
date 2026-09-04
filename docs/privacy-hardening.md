@@ -471,3 +471,57 @@ challenge 該守的本來就只有 `/`、`/watch/*`、`/admin`、`/share`。
 > 驗收在 `worker/test/fetch-handler.test.ts`「公開資料的邊界」：
 > 路人版不含 `failReason`／token／模型輸出、帶 key 版完整、
 > `source.json` 無 key 404 有 key 200、`bilingual.json` 維持公開。
+
+
+## 5.6 引號逃逸：security scan 沒報，但它的敘述把我帶過去（2026-09-04）
+
+自動掃描對 `3f53d1b..HEAD` 跑完 **沒有任何 finding**。但它在說明「為什麼 admin 那列是乾淨的」
+時提到一句：那列把標題放進 `title='…'`。追下去發現一條真的鏈路。
+
+### `esc()` 不跳脫引號
+
+```js
+// 原本：靠 textContent → innerHTML 的序列化
+function esc(v) { var d = document.createElement("span"); d.textContent = v; return d.innerHTML; }
+```
+
+HTML 序列化器只處理 `& < >` 與 nbsp —— **不處理引號**，因為文字節點裡的引號沒有意義。
+但 `title='…'` 是**屬性位置**，引號在那裡有意義：
+
+```
+標題：片名' onmouseover='steal(localStorage)
+輸出：<a class='title' title='片名' onmouseover='steal(localStorage)'>
+                            ↑ 屬性在這裡就關掉了
+```
+
+### 為什麼這是真的，不是理論
+
+**影片標題來自 YouTube**（`ext/bridge.js` 讀 `videoDetails.title`），跟字幕一樣是
+**任何人都能上傳的內容**。完整鏈路與 §5.1 修掉的那條同一類，只是換個欄位、換個位置：
+
+```
+攻擊者的影片標題帶單引號 → 你 ingest 那支片（日常動作）
+  → 開 /admin → 屬性被關掉、事件處理器被塞進去
+  → 同源的 localStorage 裡就是 INGEST_KEY
+```
+
+`/admin` 有 Cloudflare Access 擋在前面 **但那沒有用** —— XSS 是在你登入後的瀏覽器裡跑的。
+
+### 修法：修在 helper 層
+
+三份 `esc()` 全部改成明確的字元對映，連 `"` 與 `'` 一起跳脫。
+`ext/popup.js` 的 `esc` 本來就跳脫 `"`（它的屬性用雙引號，所以是安全的），
+順手補上 `'`，別讓下一個人踩到同一個坑。
+
+### 三件值得記住的事
+
+1. **`esc()` 這個名字騙人**：它得對「用在哪個位置」負責。文字內容與屬性值的逃逸規則不一樣，
+   而同一個函式兩邊都在用 → **那就取兩者的聯集**，別讓呼叫端去判斷
+2. **自動掃描的價值不只在它的 finding**：這條是它「解釋為什麼乾淨」時順帶暴露的構造。
+   掃描報告的敘述部分值得逐句讀，不是只看結論
+3. **同一類漏洞會換個欄位再來一次**：§5.1 修的是字幕 → `failReason` → 文字位置；
+   這條是標題 → `title` → 屬性位置。修完一條要問「同樣的外部輸入還流去哪裡」
+
+> 驗收：`worker/test/player.test.ts` 的「esc() 的引號安全」——
+> 三個頁面的 `esc()` 都跳脫引號、帶單引號的標題關不掉 `title` 屬性、
+> 以及 share 頁（唯一沒有 `esc()` 的頁）插進 `href` 的 id 一定是 regex 驗過的 11 碼。
