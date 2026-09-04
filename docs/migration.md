@@ -137,6 +137,17 @@ Claude public artifacts 的教訓是：**「沒有連結就沒人知道」不成
    （已實作）— key 永不出現在可被記錄的 URL 上
 4. 已接受的殘餘風險（記錄在案）：videoId 可枚舉，任何人可探測 `/subs/{id}/info.json` 200/404
    得知「某支影片有沒有被我翻過」。自用容忍；若未來介意，升級為 watch/subs 也要 key + 每片分享 token
+> ⚠️ **2026-09-04 修正:這一條當初的實作是錯的。** 程式端只比對
+> `cf-access-authenticated-user-email` 這個 header,而且**套用在所有路徑**上,不只 `/admin`。
+> Access 沒有蓋到的路徑,Cloudflare 不會幫你把使用者自己送的同名 header 拿掉 ——
+> 等於任何人送一個 header 就拿到 INGEST_KEY 等級的權限(寫入、觸發 LLM、讀瀏覽紀錄),
+> 而 owner email 是公開的 git author。
+> 現在改成兩道:(a) 只在 `/admin` 路徑採信,(b) 驗 `Cf-Access-Jwt-Assertion` 的 RS256 簽章
+>(`worker/src/access.ts`,實作沿用 mahou)。啟用需要另外兩把 secret:
+> `ACCESS_TEAM`(團隊名,`<這一段>.cloudflareaccess.com`)與 `ACCESS_AUD`(該 Application 的
+> Audience Tag,64 位十六進位;Zero Trust → Access → Applications → Configure → Additional settings)。
+> **兩把缺一 → 一律不採信 Access header**,只認 key(fail-closed)。
+
 5. 合併後的 `/admin`（video 路由貼連結頁）沿用 kvsplayer 的 **Cloudflare Access（Google SSO）**，
    path 範圍鎖 `/admin/*`；API 寫入維持 key。兩種認證並存，規則：**人用 Access、程式用 key**
 
