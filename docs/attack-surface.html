@@ -1,0 +1,364 @@
+<!DOCTYPE html>
+<!--
+  ytplayer 對外攻擊面盤點（2026-09-04）。
+  這份是**快照**：依據當天的 worker/src/index.ts、validate.ts、player.ts 與 production 實測。
+  改動路由、白名單或認證邏輯時，記得回來對一次 —— 過期的安全文件比沒有更糟。
+
+  文字版與完整診斷：docs/privacy-hardening.md §5–§6
+  驗收：worker/test/fetch-handler.test.ts 的「公開資料的邊界」
+-->
+<html lang="zh-Hant-TW">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex">
+<title>一個路人開了 ytplayer 會走到哪｜ytplayer</title>
+</head>
+<body>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600;700&family=Noto+Sans+TC:wght@400;500;700&display=swap">
+<style>
+  :root {
+    --ground: #f5f7fa;
+    --panel: #ffffff;
+    --panel-2: #eef1f6;
+    --line: #dbe1ea;
+    --ink: #151920;
+    --dim: #5c6675;
+    --accent: #2f6fd0;
+    --ok: #1a7f4b;
+    --warn: #9a5b00;
+    --risk: #b3261e;
+    --note: #a4700a;
+    --sans: "IBM Plex Sans", "Noto Sans TC", "PingFang TC", "Microsoft JhengHei", sans-serif;
+    --mono: "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+  }
+  :root:not([data-theme="light"]) {
+    color-scheme: light;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --ground: #0f1115;
+      --panel: #171a21;
+      --panel-2: #1d2129;
+      --line: #262b36;
+      --ink: #e8eaf0;
+      --dim: #8b93a5;
+      --accent: #9ecbff;
+      --ok: #4ec98a;
+      --warn: #ffc45a;
+      --risk: #ff8a80;
+      --note: #ffd54a;
+      color-scheme: dark;
+    }
+  }
+  :root[data-theme="dark"] {
+    --ground: #0f1115;
+    --panel: #171a21;
+    --panel-2: #1d2129;
+    --line: #262b36;
+    --ink: #e8eaf0;
+    --dim: #8b93a5;
+    --accent: #9ecbff;
+    --ok: #4ec98a;
+    --warn: #ffc45a;
+    --risk: #ff8a80;
+    --note: #ffd54a;
+    color-scheme: dark;
+  }
+
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--ground);
+    color: var(--ink);
+    font-family: var(--sans);
+    font-size: 15px;
+    line-height: 1.7;
+    -webkit-font-smoothing: antialiased;
+  }
+  .wrap { max-width: 920px; margin: 0 auto; padding: 40px 24px 72px; }
+
+  header { border-bottom: 2px solid var(--ink); padding-bottom: 22px; margin-bottom: 34px; }
+  .eyebrow {
+    font-family: var(--mono); font-size: 11px; letter-spacing: .14em;
+    text-transform: uppercase; color: var(--dim); margin: 0 0 10px;
+  }
+  h1 {
+    font-size: clamp(27px, 4.4vw, 40px); line-height: 1.2; font-weight: 700;
+    margin: 0 0 14px; letter-spacing: -.02em; text-wrap: balance;
+  }
+  .lede { margin: 0; max-width: 62ch; color: var(--dim); font-size: 16px; }
+  .lede strong { color: var(--ink); font-weight: 600; }
+
+  h2 {
+    font-size: 20px; font-weight: 700; margin: 46px 0 6px;
+    letter-spacing: -.01em; text-wrap: balance;
+  }
+  h2 .num {
+    font-family: var(--mono); font-size: 13px; font-weight: 500;
+    color: var(--accent); margin-right: 10px;
+  }
+  .sub { margin: 0 0 20px; color: var(--dim); max-width: 64ch; }
+  p { max-width: 66ch; }
+
+  code, .path {
+    font-family: var(--mono); font-size: .88em;
+    background: var(--panel-2); padding: .12em .38em; border-radius: 3px;
+  }
+
+  /* 動線：真的是有序步驟，所以才編號 */
+  .flow { list-style: none; margin: 0; padding: 0; display: grid; gap: 2px; }
+  .flow li {
+    display: grid; grid-template-columns: 34px 1fr; gap: 14px;
+    background: var(--panel); border: 1px solid var(--line); padding: 14px 16px;
+  }
+  .flow li:first-child { border-radius: 8px 8px 0 0; }
+  .flow li:last-child { border-radius: 0 0 8px 8px; }
+  .flow .step {
+    font-family: var(--mono); font-size: 12px; font-weight: 600;
+    color: var(--dim); padding-top: 3px;
+  }
+  .flow h3 { margin: 0 0 3px; font-size: 15px; font-weight: 600; }
+  .flow p { margin: 0; color: var(--dim); font-size: 14px; max-width: none; }
+  .flow .verdict { font-weight: 600; }
+  .v-ok { color: var(--ok); }
+  .v-warn { color: var(--warn); }
+  .v-risk { color: var(--risk); }
+
+  .tablewrap { overflow-x: auto; border: 1px solid var(--line); border-radius: 8px; background: var(--panel); }
+  table { border-collapse: collapse; width: 100%; min-width: 660px; font-size: 14px; }
+  th, td { text-align: left; padding: 10px 14px; border-bottom: 1px solid var(--line); vertical-align: top; }
+  thead th {
+    font-family: var(--mono); font-size: 11px; letter-spacing: .08em; text-transform: uppercase;
+    color: var(--dim); font-weight: 500; background: var(--panel-2); white-space: nowrap;
+  }
+  tbody tr:last-child td { border-bottom: 0; }
+  td.p { font-family: var(--mono); font-size: 13px; white-space: nowrap; }
+  td.code { font-family: var(--mono); font-variant-numeric: tabular-nums; white-space: nowrap; }
+
+  .pill {
+    display: inline-block; font-family: var(--mono); font-size: 11px; font-weight: 500;
+    padding: 1px 7px; border-radius: 99px; border: 1px solid currentColor; white-space: nowrap;
+  }
+  .pill.open { color: var(--ok); }
+  .pill.key { color: var(--accent); }
+  .pill.sso { color: var(--warn); }
+
+  .finding {
+    background: var(--panel); border: 1px solid var(--line);
+    border-left: 3px solid var(--sev, var(--line));
+    border-radius: 0 8px 8px 0; padding: 16px 18px; margin-bottom: 14px;
+  }
+  .finding.warn { --sev: var(--warn); }
+  .finding.ok { --sev: var(--ok); }
+  .finding h3 { margin: 0 0 6px; font-size: 15.5px; font-weight: 600; }
+  .finding p { margin: 0 0 8px; font-size: 14px; }
+  .finding p:last-child { margin-bottom: 0; }
+  .finding .fix {
+    font-size: 13.5px; color: var(--dim);
+    border-top: 1px dashed var(--line); padding-top: 8px; margin-top: 10px;
+  }
+  .finding .fix b { color: var(--ink); font-weight: 600; }
+
+  .note {
+    border-left: 3px solid var(--note); padding: 2px 0 2px 15px;
+    margin: 22px 0; color: var(--dim); font-size: 14px;
+  }
+  .note b { color: var(--ink); }
+
+  .method { display: grid; gap: 2px; }
+  .method div {
+    background: var(--panel); border: 1px solid var(--line); padding: 12px 16px;
+    display: grid; grid-template-columns: 132px 1fr; gap: 14px; font-size: 14px;
+  }
+  .method div:first-child { border-radius: 8px 8px 0 0; }
+  .method div:last-child { border-radius: 0 0 8px 8px; }
+  .method dt { font-weight: 600; }
+  .method dd { margin: 0; color: var(--dim); }
+
+  footer {
+    margin-top: 52px; padding-top: 18px; border-top: 1px solid var(--line);
+    color: var(--dim); font-size: 13px;
+  }
+  @media (max-width: 620px) {
+    .method div { grid-template-columns: 1fr; gap: 2px; }
+  }
+</style>
+
+<div class="wrap">
+<header>
+  <p class="eyebrow">ytplayer.ai-apps.work · 2026-09-04 實測 · 三項已收斂</p>
+  <h1>一個路人開了 ytplayer 會走到哪</h1>
+  <p class="lede">結論先講：<strong>沒有連結的路人拿不到任何影片</strong>，也沒有任何寫入路徑進得去。曝險只有一種——拿到 <span class="path">/watch/{id}</span> 連結的人看得到那支片。原本連「花了多少錢、模型吐了什麼」都一起送出去，<strong>那三項已經收掉了</strong>；剩下的字幕本體是刻意的取捨。</p>
+</header>
+
+<h2><span class="num">01</span>四段動線</h2>
+<p class="sub">從網址列到資料，中間有四道關卡。每一道擋掉的東西不一樣。</p>
+<ol class="flow">
+  <li>
+    <span class="step">01</span>
+    <div>
+      <h3>Cloudflare 邊界</h3>
+      <p>zone 層 WAF Managed Challenge ＋ Super Bot Fight Mode。實測 <span class="path">/</span> 用 Chrome UA 與 curl UA 都回 403 challenge，<span class="path">/health</span> 兩種都放行——<span class="verdict v-ok">規則是路徑限定的，只守頁面</span>。真人會看到一次過場，之後靠 cookie 直接進。</p>
+    </div>
+  </li>
+  <li>
+    <span class="step">02</span>
+    <div>
+      <h3>Worker 的爬蟲閘門</h3>
+      <p>只擋頁面，而且只看 User-Agent：自稱 GPTBot／CCBot／scrapy／空 UA 的一律 403，<b>正牌搜尋引擎放行</b>——要讓它讀得到 <span class="path">X-Robots-Tag: noindex</span>，擋掉反而會被收錄。</p>
+    </div>
+  </li>
+  <li>
+    <span class="step">03</span>
+    <div>
+      <h3>路由與認證</h3>
+      <p>寫入端點一律要 key（header；<span class="path">?key=</span> 只認頁面路由）。<span class="path">/admin</span> 另有 Cloudflare Access SSO。清單資料要 key，<b>單片播放刻意公開</b>——連結才好分享。</p>
+    </div>
+  </li>
+  <li>
+    <span class="step">04</span>
+    <div>
+      <h3>資料層</h3>
+      <p>R2 <span class="verdict v-ok">沒有公開 bucket</span>，只有 binding。對外唯一的路是 <span class="path">/subs/{11 碼}/{白名單檔名}</span>，而且 <b>content-type 由 Worker 決定</b>（<span class="path">.srt</span> → text/plain，其餘 → application/json），不跟著物件走——所以塞不出 <span class="path">text/html</span>。</p>
+    </div>
+  </li>
+</ol>
+
+<div class="note">
+  <b>兩條路人動線的差別只在有沒有連結。</b>沒有連結：開 <span class="path">/</span> → 頁面骨架載入 → 前端打 <span class="path">/videos.json</span> → <b>403</b> → 出現輸入金鑰的提示。<b>拿不到任何 videoId，等於什麼都看不到。</b>有連結：<span class="path">/watch/{id}</span> 整頁可用，字幕、逐句稿、原文全部看得到——這是設計上接受的取捨。
+</div>
+
+<h2><span class="num">02</span>路由表：誰過得去，看得到什麼</h2>
+<p class="sub">「路人」＝ 沒有金鑰、沒有 Access 帳號、手上可能有一條 watch 連結的人。</p>
+<div class="tablewrap">
+<table>
+  <thead>
+    <tr><th>路徑</th><th>路人</th><th>看得到什麼</th><th>評級</th></tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td class="p">/</td>
+      <td><span class="pill open">頁面公開</span></td>
+      <td>只有空殼與金鑰提示。清單資料在 <span class="path">/videos.json</span>，沒 key 回 403</td>
+      <td class="v-ok">安全</td>
+    </tr>
+    <tr>
+      <td class="p">/watch/{id}</td>
+      <td><span class="pill open">公開</span></td>
+      <td>該片的雙語字幕、逐句稿、譯註</td>
+      <td class="v-warn">已知取捨</td>
+    </tr>
+    <tr>
+      <td class="p">/subs/{id}/bilingual.json<br>/subs/{id}/bilingual.srt</td>
+      <td><span class="pill open">公開</span></td>
+      <td>完整譯文 ＋ 原文，可整份下載</td>
+      <td class="v-warn">已知取捨</td>
+    </tr>
+    <tr>
+      <td class="p">/subs/{id}/source.json</td>
+      <td><span class="pill key">要 key</span></td>
+      <td>已移出公開白名單（player 一個欄位都沒用到）</td>
+      <td class="v-ok">已收斂</td>
+    </tr>
+    <tr>
+      <td class="p">/subs/{id}/status.json</td>
+      <td><span class="pill open">公開（遮蔽）</span></td>
+      <td>只有 <span class="path">stage</span>／<span class="path">step</span>／<span class="path">failed</span>。模型、token、失敗原因要 key</td>
+      <td class="v-ok">已收斂</td>
+    </tr>
+    <tr>
+      <td class="p">/subs/{id}/sentences.json<br>/subs/{id}/glossary.json<br>/subs/{id}/info.json</td>
+      <td><span class="pill open">公開</span></td>
+      <td>斷句中間產物、術語表</td>
+      <td class="v-ok">低</td>
+    </tr>
+    <tr>
+      <td class="p">/health</td>
+      <td><span class="pill open">公開（遮蔽）</span></td>
+      <td>只有 <span class="path">service</span>／<span class="path">ok</span>。今日用量與設定旗標要 key</td>
+      <td class="v-ok">已收斂</td>
+    </tr>
+    <tr>
+      <td class="p">/videos.json</td>
+      <td><span class="pill key">要 key</span></td>
+      <td>403。這是觀看紀錄，等於「我看過哪些片」</td>
+      <td class="v-ok">安全</td>
+    </tr>
+    <tr>
+      <td class="p">/jobs.json</td>
+      <td><span class="pill key">要 key</span></td>
+      <td>403</td>
+      <td class="v-ok">安全</td>
+    </tr>
+    <tr>
+      <td class="p">/admin</td>
+      <td><span class="pill sso">Access SSO</span></td>
+      <td>連 Worker 都到不了，Cloudflare 先擋</td>
+      <td class="v-ok">安全</td>
+    </tr>
+    <tr>
+      <td class="p">POST /ingest<br>POST /translate/{id}<br>POST /patch/{id}<br>POST /retime/{id}<br>POST /watch-job/{id}<br>POST /inbox</td>
+      <td><span class="pill key">要 key</span></td>
+      <td>403，而且錯誤回應也帶 CORS 標頭（讀得到原因，不會變成 Failed to fetch）</td>
+      <td class="v-ok">安全</td>
+    </tr>
+    <tr>
+      <td class="p">R2 直連</td>
+      <td><span class="pill sso">無此路徑</span></td>
+      <td>沒有公開 bucket、沒掛網域，只有 Worker binding</td>
+      <td class="v-ok">安全<sup>*</sup></td>
+    </tr>
+  </tbody>
+</table>
+</div>
+<p class="sub" style="margin-top:10px"><sup>*</sup> 這是<b>讀程式碼</b>的結論。R2 也可能在 dashboard 上被開了 public access 或自訂網域，那個設定不在 repo 裡——值得去確認一次。</p>
+
+<h2><span class="num">03</span>三個收斂：功能一點都沒少</h2>
+<p class="sub">沒有「路人能造成損害」的路徑（寫入全部要 key）。以下是讀取面給得比需要的多的三處，<b>2026-09-04 全部收掉</b>——重點是三個都沒有犧牲任何功能。</p>
+
+<div class="finding ok">
+  <h3>status.json 只剩進度三欄</h3>
+  <p>原本拿到一條 watch 連結，就順便看得到這支片用了多少 token、哪個模型、失敗原因是什麼。而 <span class="path">failReason</span> 會帶<b>模型輸出的開頭</b>——那是外部可控內容（字幕可以被 prompt injection）。</p>
+  <p class="fix"><b>做法：</b>公開版只回 <span class="path">stage</span>／<span class="path">step</span>／<span class="path">failed</span>。<b>player 頁照樣顯示失敗原因</b>——它改成「localStorage 有金鑰就帶上」，同源請求加 header 不觸發預檢，零成本。自己人看完整版，路人看進度。</p>
+</div>
+
+<div class="finding ok">
+  <h3>/health 不再報今日用量</h3>
+  <p>原本任何人都看得到你今天翻了幾支、花掉多少 token。<span class="path">ingestKeyConfigured</span> 更直接——它若是 <span class="path">false</span>，等於公告「這站現在誰都能寫」。</p>
+  <p class="fix"><b>做法：</b>公開版只留 <span class="path">service</span>／<span class="path">ok</span>。<b>ext 的分層診斷照樣能用</b>，它只看 <span class="path">service === 'ytplayer'</span>。用量要 key：<span class="path">curl -H "x-ingest-key: …"</span>。</p>
+</div>
+
+<div class="finding ok">
+  <h3>source.json 整份移出白名單</h3>
+  <p>原始字幕軌加影片描述前 2000 字，是公開資料量最大的一份——而 <b>player 一個欄位都沒用到</b>。沒有使用端的東西，遮蔽不如不給。</p>
+  <p class="fix"><b>做法：</b>要 key 才拿得到。本機的 ab-runner 改成帶 <span class="path">INGEST_KEY</span>，沒設會明講「需要金鑰」而不是回一個莫名其妙的 404。</p>
+</div>
+
+<div class="finding ok">
+  <h3>更早之前處理掉的：字幕 → XSS → 偷金鑰</h3>
+  <p>字幕是外部可控輸入。原本 <span class="path">failReason</span> 會被塞進 <span class="path">/watch</span> 的 <span class="path">innerHTML</span>，而同源的 localStorage 存著 INGEST_KEY——完整鏈路成立。2026-08-21 補上 escape、<span class="path">?key=</span> 限定頁面路由、CSP（<span class="path">connect-src 'self'</span> 讓被注入的腳本也送不出去）。</p>
+</div>
+
+<h2><span class="num">04</span>這張表是怎麼驗出來的</h2>
+<p class="sub">沒有 Cloudflare API token，也沒有 R2 憑證。所以能驗的與不能驗的，界線很清楚。</p>
+<div class="method">
+  <div><dt>讀原始碼</dt><dd>路由表、認證判斷、白名單、content-type 決定邏輯——這些是事實，不是推測</dd></div>
+  <div><dt>本機假替身</dt><dd>測試跑的是 in-memory 的 FakeR2／FakeQueue，從來沒碰過真的 R2</dd></div>
+  <div><dt>公開端點</dt><dd><span class="path">/subs/{id}/*</span> 本來就對外，curl 直接量得到——這也正是它們「公開」的證明</dd></div>
+  <div><dt>金鑰端點</dt><dd>用你貼在對話裡的 INGEST_KEY 打過 <span class="path">/videos.json</span> 與 <span class="path">/jobs.json</span>。<b>這就是它該換掉的理由</b></dd></div>
+  <div><dt>驗不到的</dt><dd>R2 dashboard 有沒有開 public access、WAF 規則的實際表達式、SBFM 的設定——全都要你去看</dd></div>
+</div>
+
+<div class="note">
+  <b>殘餘風險維持不變、且已接受：</b>拿到 <span class="path">/watch/{id}</span> 連結的人看得到那支片。要關掉這條，得讓 <span class="path">/watch</span> 也走 key-gate——但那就不能分享了，是另一個取捨。這次收的是「連結之外還多送了什麼」，不是這條本身。
+</div>
+
+<footer>
+  依據 2026-09-04 的 <span class="path">worker/src/index.ts</span>、<span class="path">validate.ts</span>、<span class="path">player.ts</span> 與 production 實測。三項收斂的驗收在 <span class="path">worker/test/fetch-handler.test.ts</span>「公開資料的邊界」；完整診斷見 <span class="path">docs/privacy-hardening.md</span> §5–§6。
+</footer>
+</div>
+</body>
+</html>

@@ -179,6 +179,7 @@ video 路由的影片另有**字卡層**（🃏 疊畫面上緣、逐句稿有�
 | [docs/model-reeval-sop.md](docs/model-reeval-sop.md) | **模型重評 SOP**：觸發條件、固定五步、判讀規則（候選 mean 要超出基準 min–max）|
 | [docs/exp-2026-08-16.md](docs/exp-2026-08-16.md) | **上線後補測**：G1 頻道表約束力、3.6-flash 重評、lite × 協定總表（含還沒測的誠實清單）|
 | [docs/patch-untranslated.md](docs/patch-untranslated.md) | **未譯句自動偵測 + 補譯**：三種病因解剖、P0 預防、P1 補譯步驟（後來一般化成 `?mode=`）、實測 |
+| [docs/attack-surface.html](docs/attack-surface.html) | **對外攻擊面一頁圖**（HTML，直接用瀏覽器開）：路人的四段動線、完整路由表（誰過得去、看得到什麼）、三項讀取面收斂、以及「沒有 CF token 時哪些驗得到哪些驗不到」|
 | [docs/list-scaling.md](docs/list-scaling.md) | **清單頁的規模上限**：為什麼 5–8 秒、並行讀只治標、100 支之後改用 customMetadata + 一次 list，以及為什麼不做單一 list.json |
 | [docs/adr-001-line-budget.md](docs/adr-001-line-budget.md) | **ADR：字幕排版用「行數預算」不用開關**：為什麼是預算不是開關、砍的順序是權限問題、Chromium 實測 7 種情境、「縮字級不會減少行數」的坑 |
 | [docs/subtitle-readability.md](docs/subtitle-readability.md) | **字幕可讀性計畫**：Netflix 繁中規範（16 字/行、2 行、9 CPS）對照實測、R1 壓縮譯文／R2 折行拆塊／R3 行數預算 roll-up／R4 舊片事後套用／R5 剝夾註。§3.2 有 R4b 上線後的實戰數據與「剩下壓不動的是什麼」 |
