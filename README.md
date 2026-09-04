@@ -94,7 +94,7 @@ Caption track 有四個層級，每層是不同的題目（詳見 [docs/handoff-
   Chromium 實測真實語料 786 句：桌機 0% 超支、手機直向 ≤1%
   （[docs/adr-001-line-budget.md](docs/adr-001-line-budget.md)）
 
-prompt 目前 **v6**；worker 測試 **193 個**。品質防線與所有實證教訓見
+prompt 目前 **v6**；worker 測試 **198 個**。品質防線與所有實證教訓見
 **[docs/lessons-learned.md](docs/lessons-learned.md)**；合併決策材料見
 [docs/kvsplayer-merge-todo.md](docs/kvsplayer-merge-todo.md)。
 

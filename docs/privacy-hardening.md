@@ -183,6 +183,12 @@ TURNSTILE_SITE_KEY / TURNSTILE_SECRET 加在 dashboard 的**明文變數**，
    **有這類流量的話**：加一條 **Skip** 規則排除那些路徑（Free 版 5 條規則，還剩 4 條），
    順序放在 challenge 規則之前；或給 challenge 規則加主機條件
 
+### 🔥 3. **自己的 ext 與 API 也會被打到**（2026-09-04 實際發生，見 §6）
+
+上面兩條想的都是「外人的機器」。真正咬到的是**自己的機器對機器流量** ——
+ext 送片、ab-runner、curl 都不是瀏覽器。zone 層規則沒有路徑條件，
+就會連 `/ingest` 一起擋掉，而症狀是 ext 顯示 **`Failed to fetch`**（沒有狀態碼可看）。
+
 ### 方案成本（2026-08-17 查證）
 
 | | Free 方案 |
@@ -322,3 +328,106 @@ timedtext postMessage —— 但那是該頁自己的字幕，YouTube 本來就�
 >
 > 驗收腳本：`node worker/scripts/csp-check.mjs`（會明講哪幾條「測不到」，
 > 不會拿測不到當通過）
+
+
+## 6. 事故：ext 送片 `Failed to fetch`（2026-09-04）
+
+> 事後補記：當天 Cloudflare 剛升級 Pro 並開啟 Super Bot Fight Mode ——
+> **這件事不會出現在 git log 裡**，所以症狀看起來像「程式沒改卻壞掉」。
+
+### 症狀
+
+ext popup 送片失敗，內建分層診斷回報：**「Worker 本身正常，但 /ingest 失敗」**
+—— 也就是 `GET /health` 拿得到帶 CORS 標頭的 JSON，但 `POST /ingest` 整個 fetch 失敗。
+
+### 「Failed to fetch」代表什麼（先把範圍縮小）
+
+瀏覽器只在**沒有 HTTP 回應可讀**時這樣報，兩種可能：
+
+1. **CORS 預檢沒過** —— 回應沒有 `access-control-allow-origin`
+2. 連線層失敗／Worker 例外，根本沒有回應
+
+`/ingest` 帶 `content-type: application/json` + `x-ingest-key` 兩個非簡單標頭，
+所以瀏覽器**一定會先送一發 `OPTIONS`**。`/health` 是簡單 GET，不觸發預檢 ——
+**這正是兩者唯一的差別**，也是診斷該切下去的地方。
+
+### 查證結果
+
+- **Worker 端沒問題**：新增 `worker/test/fetch-handler.test.ts` 直接跑 fetch handler ——
+  `/ingest` 200、`OPTIONS` 回 CORS 三件套、403/400 的錯誤回應也帶 CORS、
+  `/health` 是簡單請求。全綠
+- **`?key=` 那次改動不是兇手**：ext 用的是 `x-ingest-key` **header**，不是網址帶 key
+- **邊界正在擋人**：從容器 curl 打 `/health`、`/subs/*`、`/jobs.json`
+  **全部回 403 且帶 `cf-mitigated: challenge`** —— 而同一組指令當天稍早還是正常的。
+  那是 §3.1 的 zone 層 WAF Managed Challenge，不是 Worker 回的
+
+### 結論與修法
+
+**這是邊界層擋到自己的 API，跟 Worker 程式無關。**
+challenge 頁是 403 HTML、**沒有 CORS 標頭** → 跨來源 fetch 讀不到 → `Failed to fetch`。
+
+當天同時有兩個來源會做這件事（Cloudflare 剛升級 Pro 並開了 Super Bot Fight Mode）：
+
+| 來源 | 證據 |
+|---|---|
+| **既有的 WAF Custom rule**（Managed Challenge）| `events_by_service` 只有 `Custom rules 296`／`Managed rules 20`，**沒有 Bot Fight Mode**；`events_summary` 的 Managed Challenge 尖峰（02:37 兩筆、02:38 五筆）與 curl 探測的時間戳一秒不差 |
+| **Super Bot Fight Mode**（新開）| curl 屬於「Definitely automated」，SBFM 預設就會擋。ext 的 `OPTIONS` 預檢沒有 cookie、沒有 JS 執行環境，同樣容易被判為自動化 |
+
+**一條 Skip 規則同時解掉兩個** —— 因為
+[custom rules 跑在 SBFM 之前](https://developers.cloudflare.com/bots/get-started/super-bot-fight-mode/)，
+而 Skip 動作可以連 SBFM 那個 phase 一起跳過：
+
+> Custom rules are executed before Super Bot Fight Mode. To configure exceptions to
+> Super Bot Fight Mode, create a custom rule with the *Skip* action.
+
+設定（WAF → Custom rules，**順序放到最上面**）：
+
+```
+名稱：API + preflight bypass
+表達式：
+  (http.request.method eq "OPTIONS")
+  or (http.request.uri.path in {"/ingest" "/health" "/jobs.json" "/videos.json" "/inbox.json"})
+  or (starts_with(http.request.uri.path, "/subs/"))
+  or (starts_with(http.request.uri.path, "/translate/"))
+  or (starts_with(http.request.uri.path, "/patch/"))
+  or (starts_with(http.request.uri.path, "/retime/"))
+  or (starts_with(http.request.uri.path, "/watch-job/"))
+  or (starts_with(http.request.uri.path, "/inbox/"))
+動作：Skip
+  ☑ All remaining custom rules      ← 跳過既有那條 Managed Challenge
+  ☑ Super Bot Fight Mode            ← 跳過 SBFM
+```
+
+**理由是設計上早就寫好的**：Worker 自己的爬蟲閘門「只擋頁面」（§2）——
+`/subs` 與 API 一律不擋，因為它們要嘛需要 key、要嘛需要先知道 videoId。
+邊界規則少了這個分界，才會把自己的 ext 一起擋掉。
+challenge 該守的本來就只有 `/`、`/watch/*`、`/admin`、`/share`。
+
+### ⚠ SBFM 的兩個設定會踩到本專案既有的決策
+
+1. **Verified bots 一定要維持 Allow**。把 Googlebot 擋掉，它就讀不到
+   `X-Robots-Tag: noindex` —— 那正是 §2 與 robots.txt 那條紅線的同一個陷阱
+   （擋爬蟲反而讓網址被收錄）。SBFM 有獨立的 Verified bots 開關，別順手改成 Block
+2. **JavaScript Detections 會往 HTML 注入偵測腳本**。它是同源的
+   `/cdn-cgi/challenge-platform/…`，所以 §5.4 的 CSP（`script-src 'self'`、
+   `connect-src 'self'`）**不會擋到它**。但反過來要注意：在真瀏覽器檢查
+   CSP Report-Only 的 violation 時，**有些可能來自 Cloudflare 注入的腳本而不是我們的頁面** ——
+   判斷「能不能升級成強制執行」時要把那些排除掉
+
+### 教訓
+
+- **`Failed to fetch` 要先分層**：有沒有狀態碼？是不是預檢？回應有沒有 CORS 標頭？
+  ext 的 `diagnoseWorker()` 就是為此存在，這次它精準地把範圍縮到 `/ingest`
+- **邊界規則要跟應用層的分界一致**。Worker 想得很清楚（只擋頁面），
+  zone 規則卻是全站 —— 兩層對「該擋什麼」的定義不一致，就會出現這種
+  「程式沒改卻壞掉」的故障
+- **開新的安全功能要順手想「我自己的機器流量走哪條路」**：ext 送片、ab-runner、
+  curl 探測全都是「Definitely automated」。升級方案／開 BFM 這種動作**不會**出現在
+  git log 裡，所以故障看起來像「程式沒改卻壞掉」—— 先去 Security → Events 看，
+  比在程式碼裡猜快得多
+- **Security Events 的兩張表要一起看**：`by service` 說是誰擋的
+  （Custom rules / Managed rules / Bot Fight Mode），`summary` 的時間軸說是什麼時候擋的。
+  這次就是靠「Custom rules 296、沒有 Bot Fight Mode」+「尖峰時間對得上 curl」
+  才把範圍縮到既有那條規則
+- **錯誤回應也要帶 CORS**。不然使用者看到的永遠是 `Failed to fetch`，
+  而不是「unauthorized」或「payload 超過 8MB」
